@@ -103,14 +103,23 @@ pip install -e graspnet-baseline/graspnetAPI
 
 ### 5. Download Model Weights / 下载模型权重
 
-Place all weight files in the `weights/` directory / 将所有权重文件放入 `weights/` 目录：
+`main_piperx_vision.py` needs GroundingDINO (checkpoint, config and BERT),
+SAM-B and the GraspNet checkpoint. YOLO-World and CLIP are only for the legacy
+YOLO-World pipeline. The weights are not stored in Git; place them under
+`weights/`.
 
-| 文件 | 来源 / Source |
-|---|---|
-| `logs/log_rs/checkpoint-rs.tar` | [GraspNet README](graspnet-baseline/README.md) (Google Drive / Baidu) |
-| `groundingdino_swint_ogc.pth` | [GroundingDINO releases](https://github.com/IDEA-Research/GroundingDINO) |
-| `groundingdino_swint_ogc.py` | Same repo (config file) |
-| `sam_b.pt` | Ultralytics auto-download or manual download |
+`main_piperx_vision.py` 需要 GroundingDINO、SAM-B 和 GraspNet；YOLO-World
+与 CLIP 仅供旧 YOLO-World 流程使用。权重不进入 Git，请放到 `weights/`。
+
+| 文件 / File | 版本与官方来源 / Version and source | SHA256 |
+|---|---|---|
+| `logs/log_rs/checkpoint-rs.tar` | [GraspNet official RealSense checkpoint](https://drive.google.com/file/d/1hd0G8LN6tRpi4742XOTEisbTXNZ-1jmk/view) (no release tag) | `60680087c61cba2b6791614fef1519071e294f6dcaf99b3f581bb95f7c51a868` |
+| `groundingdino_swint_ogc.pth` | [GroundingDINO `v0.1.0-alpha`](https://github.com/IDEA-Research/GroundingDINO/releases/download/v0.1.0-alpha/groundingdino_swint_ogc.pth) | `3b3ca2563c77c69f651d7bd133e97139c186df06231157a64c507099c52bc799` |
+| `groundingdino_swint_ogc.py` | [GroundingDINO config at `856dde2`](https://github.com/IDEA-Research/GroundingDINO/blob/856dde20aee659246248e20734ef9ba5214f5e44/groundingdino/config/GroundingDINO_SwinT_OGC.py), patched to use local BERT | `9707627e89288382c452f963238caa26841488a8bb300654e1dee7c232c1291d` |
+| `sam_b.pt` | [Ultralytics SAM-B `v8.2.0`](https://github.com/ultralytics/assets/releases/download/v8.2.0/sam_b.pt) | `ec2df62732614e57411cdcf32a23ffdf28910380d03139ee0f4fcbe91eb8c912` |
+| `bert-base-uncased/` | [Hugging Face `google-bert/bert-base-uncased`](https://huggingface.co/google-bert/bert-base-uncased/tree/86b5e0934494bd15c9632b12f734a8a67f723594), revision `86b5e09` | `model.safetensors`: `68d45e234eb4a928074dfd868cead0219ab85354cc53d20e772753c6bb9169d3` |
+| `yolov8s-world.pt` (legacy) | [Ultralytics YOLO-World small `v8.2.0`](https://github.com/ultralytics/assets/releases/download/v8.2.0/yolov8s-world.pt) | `095f5266bb9b654bd5ad9e21e9cdeda78e0f2c8460f5d652eaf04bab7ee251cf` |
+| `clip/ViT-B-32.pt` (legacy) | OpenAI CLIP `ViT-B/32`, source commit [`d05afc4`](https://github.com/openai/CLIP/tree/d05afc436d78f1c48dc0dbf8e5980a9d471f35f6) | `40d365715913c9da98579312b702a82c18be219cc2a73407c4526f58eba950af` |
 
 Expected layout / 权重目录结构：
 
@@ -119,7 +128,69 @@ weights/
 ├── logs/log_rs/checkpoint-rs.tar
 ├── groundingdino_swint_ogc.pth
 ├── groundingdino_swint_ogc.py
-└── sam_b.pt
+├── sam_b.pt
+├── bert-base-uncased/
+│   ├── config.json
+│   ├── model.safetensors
+│   ├── tokenizer.json
+│   ├── tokenizer_config.json
+│   └── vocab.txt
+├── yolov8s-world.pt              # legacy
+└── clip/ViT-B-32.pt              # legacy
+```
+
+Download the required files and verify them:
+
+```bash
+mkdir -p weights/logs/log_rs weights/bert-base-uncased weights/clip
+
+# GroundingDINO checkpoint and config
+curl -L --fail --retry 3 -o weights/groundingdino_swint_ogc.pth \
+  https://github.com/IDEA-Research/GroundingDINO/releases/download/v0.1.0-alpha/groundingdino_swint_ogc.pth
+curl -L --fail --retry 3 -o weights/groundingdino_swint_ogc.py \
+  https://raw.githubusercontent.com/IDEA-Research/GroundingDINO/856dde20aee659246248e20734ef9ba5214f5e44/groundingdino/config/GroundingDINO_SwinT_OGC.py
+sed -i 's|text_encoder_type = "bert-base-uncased"|text_encoder_type = "weights/bert-base-uncased"|' \
+  weights/groundingdino_swint_ogc.py
+
+# BERT base uncased at a fixed Hugging Face revision
+BERT_REV=86b5e0934494bd15c9632b12f734a8a67f723594
+for file in config.json model.safetensors tokenizer.json tokenizer_config.json vocab.txt; do
+  curl -L --fail --retry 3 -o "weights/bert-base-uncased/$file" \
+    "https://huggingface.co/google-bert/bert-base-uncased/resolve/$BERT_REV/$file"
+done
+
+# SAM-B
+curl -L --fail --retry 3 -o weights/sam_b.pt \
+  https://github.com/ultralytics/assets/releases/download/v8.2.0/sam_b.pt
+
+# GraspNet official RealSense checkpoint
+python -m pip install gdown
+gdown 1hd0G8LN6tRpi4742XOTEisbTXNZ-1jmk -O weights/logs/log_rs/checkpoint-rs.tar
+
+# Legacy YOLO-World pipeline (optional)
+curl -L --fail --retry 3 -o weights/yolov8s-world.pt \
+  https://github.com/ultralytics/assets/releases/download/v8.2.0/yolov8s-world.pt
+curl -L --fail --retry 3 -o weights/clip/ViT-B-32.pt \
+  https://openaipublic.azureedge.net/clip/models/40d365715913c9da98579312b702a82c18be219cc2a73407c4526f58eba950af/ViT-B-32.pt
+```
+
+```bash
+sha256sum -c <<'EOF'
+60680087c61cba2b6791614fef1519071e294f6dcaf99b3f581bb95f7c51a868  weights/logs/log_rs/checkpoint-rs.tar
+3b3ca2563c77c69f651d7bd133e97139c186df06231157a64c507099c52bc799  weights/groundingdino_swint_ogc.pth
+9707627e89288382c452f963238caa26841488a8bb300654e1dee7c232c1291d  weights/groundingdino_swint_ogc.py
+ec2df62732614e57411cdcf32a23ffdf28910380d03139ee0f4fcbe91eb8c912  weights/sam_b.pt
+68d45e234eb4a928074dfd868cead0219ab85354cc53d20e772753c6bb9169d3  weights/bert-base-uncased/model.safetensors
+EOF
+```
+
+Only if the legacy YOLO-World weights were downloaded:
+
+```bash
+sha256sum -c <<'EOF'
+095f5266bb9b654bd5ad9e21e9cdeda78e0f2c8460f5d652eaf04bab7ee251cf  weights/yolov8s-world.pt
+40d365715913c9da98579312b702a82c18be219cc2a73407c4526f58eba950af  weights/clip/ViT-B-32.pt
+EOF
 ```
 
 ### 6. Configure Environment Variables / 配置环境变量
@@ -159,6 +230,34 @@ Configure the CAN interface for Piper according to the [piper_sdk documentation]
 ## Quick Start / 快速开始
 
 All scripts are run from the **repository root** / 所有脚本均在**仓库根目录**下运行。
+
+### Piper X MuJoCo Simulation / Piper X 仿真
+
+```bash
+conda activate piper_mujoco
+python main_piperx.py --hold
+```
+
+使用官方 Piper X + AGX 平行夹爪模型，完成瓶子的接近、抓取、搬运和放置；增加 `--object cube` 可切回原红色方块。
+基础演示只依赖 NumPy 和 MuJoCo，使用物体已知坐标，不需要视觉权重。
+无窗口验收可运行 `python main_piperx.py --headless`。
+
+已安装视觉依赖和权重时，可直接运行视觉引导抓取：
+
+```bash
+python main_piperx_vision.py --hold
+# 切回红方块：python main_piperx_vision.py --object cube --hold
+# 抓取前停留 10 秒查看位姿：增加 --grasp-preview-seconds 10
+# 无窗口：增加 --headless --fast，去掉 --hold
+```
+
+视觉入口默认抓取蓝色瓶子，检测提示词随物体选项自动切换。相机直接安装在夹爪横向支架前侧；窗口右上角显示实时腕部 RGB 和深度画面，增加 `--no-camera-preview` 可隐藏。程序使用拍摄时的外参转换抓取位姿，预检查整条轨迹、用当前触觉确认夹持，放置后重新拍摄确认；失败时在尝试次数内恢复并重新感知。
+
+语义指令入口支持左、右、前、后、中间五种放置方向；其中 `right` 已完成完整抓放验收，其余方向目前使用固定世界坐标，尚需逐项验证。方向和落点的详细限制见 [Piper X 仿真说明](docs/piperx_sim.md#语义指令与放置方向)。
+
+最终选中的抓取位姿会显示在三维场景和腕部 RGB 图中：红/绿/蓝为 TCP 的 X/Y/Z 轴，青色为夹爪轮廓，黄色为接近方向。窗口左下角显示世界坐标下的 XYZ、RPY 和开口；默认抓取前停留 2 秒，`--grasp-preview-seconds 0` 可取消停留。
+模型生成方式、控制约定和视觉接入状态见 [Piper X 仿真说明](docs/piperx_sim.md)。
+本轮接入过程、实现方法和验收结果汇总见 [PiperX 仿真视觉抓取工作总结](docs/piperx_project_summary.md)。
 
 ### UR5 MuJoCo Simulation / UR5 仿真
 

@@ -1,3 +1,6 @@
 [submodule "graspnet-baseline"]
 	path = graspnet-baseline
 	url = git@github.com:graspnet/graspnet-baseline.git
+[submodule "external/agx_arm_urdf"]
+	path = external/agx_arm_urdf
+	url = https://github.com/agilexrobotics/agx_arm_urdf.git

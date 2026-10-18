@@ -1,0 +1,83 @@
+{
+  "grasps_json": "/tmp/rank1_grasps.json",
+  "rank": 1,
+  "score": 0.3249299228191376,
+  "grasp_width_m": 0.061373915523290634,
+  "jaw_variant": "original",
+  "jaw_branch": "far",
+  "depth_offset_m": 0.0,
+  "settled_free_joint_qpos": [
+    0.3599910531899197,
+    -0.12079061160439138,
+    0.7438803788241992,
+    0.9947086328634884,
+    0.10270968808491786,
+    0.0015651280080359706,
+    0.0017337977587951077
+  ],
+  "object_xipos_before": [
+    0.380885095549245,
+    -0.12497212658296154,
+    0.7580945206303809
+  ],
+  "reference_initial_position": [
+    0.38090699089727265,
+    -0.12497470733391099,
+    0.7580945181213234
+  ],
+  "reference_xipos_error_m": 2.2046916950236222e-05,
+  "initial": {
+    "tcp_pose": [
+      [
+        -0.9999999976556485,
+        3.4911734681312723e-06,
+        -6.838507495304407e-05,
+        0.31985865978143696
+      ],
+      [
+        3.503479260673207e-06,
+        0.9999999838030038,
+        -0.00017994921967287694,
+        -0.11993629321484957
+      ],
+      [
+        6.83844456114698e-05,
+        -0.0001799494588367042,
+        -0.9999999814708818,
+        0.8999798354859674
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "object_xipos": [
+      0.380885095549245,
+      -0.12497212658296154,
+      0.7580945206303809
+    ],
+    "gripper_width_m": 0.09999999907108331,
+    "finger_contact": {
+      "left": false,
+      "right": false,
+      "bilateral": false,
+      "width": 0.09999999907108331
+    },
+    "pad_centres_world": {
+      "gripper_link1_pad": [
+        0.3198584203287822,
+        -0.1689364695355899,
+        0.8989886517145093
+      ],
+      "gripper_link2_pad": [
+        0.31985876508968103,
+        -0.07093647140873902,
+        0.898971016667415
+      ]
+    },
+    "finger_contacts": []
+  },
+  "plan_error": "All pick/place transport variants failed: direct: approach: Unreachable pose [0.3282862794416455, -0.12077531187853438, 0.8909603444945016]: position error=0.0016 m, rotation error=0.0065 rad | reorient flipped: approach: Unreachable pose [0.3282862794416455, -0.12077531187853438, 0.8909603444945016]: position error=0.0016 m, rotation error=0.0065 rad | reorient original: approach: Unreachable pose [0.3282862794416455, -0.12077531187853438, 0.8909603444945016]: position error=0.0016 m, rotation error=0.0065 rad"
+}

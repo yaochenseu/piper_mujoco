@@ -146,5 +146,15 @@ weights/*.tar
 weights/*.pt
 weights/*.pth
 weights/*.bin
+weights/**
+!weights/.gitkeep
+docs/vision_runs/
 data/
 =2.12
+
+# local-only third-party checkouts and notes
+external/CLIP/
+external/GroundingDINO/
+pybullet-object-models/
+codex.md
+kimicode.md

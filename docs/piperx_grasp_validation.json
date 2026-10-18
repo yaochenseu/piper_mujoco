@@ -1,0 +1,257 @@
+{
+  "verified_at": "2026-10-17T18:28:12.497577+08:00",
+  "python": "/home/yzc/miniconda3/envs/piper_mujoco/bin/python",
+  "tests": {
+    "command": "python -m unittest discover -s tests -p 'test_piperx_*.py' -v",
+    "count": 29,
+    "passed": true
+  },
+  "control_sensors": [
+    "RGB-D target detection/segmentation",
+    "lower bottle wall circle fit from RGB-D (bottle only)",
+    "GraspNet score and jaw yaw candidates",
+    "current two-jaw contacts",
+    "jaw opening",
+    "TCP pose"
+  ],
+  "simulator_object_pose_used_for_control": false,
+  "scenarios": [
+    {
+      "name": "bottle_default",
+      "success": true,
+      "object_type": "bottle",
+      "caption": "blue bottle .",
+      "initial_position": [
+        0.4199974226491129,
+        -0.12000384247968865,
+        0.7619570377398487
+      ],
+      "final_position": [
+        0.4202486005532549,
+        0.15928601016264846,
+        0.7619569676804631
+      ],
+      "lift_height_m": 0.09856940287138405,
+      "placement_error_m": 0.0007560315621189014,
+      "recovery_count": 0,
+      "camera_preview": {
+        "enabled": false
+      },
+      "selected_rank": 1,
+      "observations": [
+        "cycle_00/pickup",
+        "cycle_00/placement"
+      ],
+      "unexpected_contacts": [],
+      "mujoco_warnings": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "detail_report": "docs/vision_runs/bottle_body_default/result.json",
+      "body_fit_report": "docs/vision_runs/bottle_body_default/cycle_00/pickup/bottle_body_fit.json"
+    },
+    {
+      "name": "bottle_moved",
+      "success": true,
+      "object_type": "bottle",
+      "caption": "blue bottle .",
+      "initial_position": [
+        0.2999975149014211,
+        0.07999371829563325,
+        0.761956938692011
+      ],
+      "final_position": [
+        0.4199943195636786,
+        0.15935817736340482,
+        0.7619569857516209
+      ],
+      "lift_height_m": 0.09858001631102409,
+      "placement_error_m": 0.0006418477733877319,
+      "recovery_count": 0,
+      "camera_preview": {
+        "enabled": false
+      },
+      "selected_rank": 0,
+      "observations": [
+        "cycle_00/pickup",
+        "cycle_00/placement"
+      ],
+      "unexpected_contacts": [],
+      "mujoco_warnings": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "detail_report": "docs/vision_runs/bottle_body_moved/result.json",
+      "body_fit_report": "docs/vision_runs/bottle_body_moved/cycle_00/pickup/bottle_body_fit.json"
+    },
+    {
+      "name": "bottle_viewer",
+      "success": true,
+      "object_type": "bottle",
+      "caption": "blue bottle .",
+      "initial_position": [
+        0.4199974226491129,
+        -0.12000384247968865,
+        0.7619570377398487
+      ],
+      "final_position": [
+        0.4202486005532549,
+        0.15928601016264846,
+        0.7619569676804631
+      ],
+      "lift_height_m": 0.09856940287138405,
+      "placement_error_m": 0.0007560315621189014,
+      "recovery_count": 0,
+      "camera_preview": {
+        "enabled": true,
+        "camera": "wrist",
+        "frame_count": 178,
+        "fps": 10,
+        "display": "viewer RGB/depth insets"
+      },
+      "selected_rank": 1,
+      "observations": [
+        "cycle_00/pickup",
+        "cycle_00/placement"
+      ],
+      "unexpected_contacts": [],
+      "mujoco_warnings": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "detail_report": "docs/vision_runs/bottle_body_gui/result.json",
+      "body_fit_report": "docs/vision_runs/bottle_body_gui/cycle_00/pickup/bottle_body_fit.json"
+    },
+    {
+      "name": "cube_regression",
+      "success": true,
+      "object_type": "cube",
+      "caption": "red cube .",
+      "initial_position": [
+        0.4200000384517879,
+        -0.12000001050014764,
+        0.7579573982704929
+      ],
+      "final_position": [
+        0.42366057931614975,
+        0.1623384459370719,
+        0.7579573982759628
+      ],
+      "lift_height_m": 0.09997618620950022,
+      "placement_error_m": 0.004343750721488462,
+      "recovery_count": 0,
+      "camera_preview": {
+        "enabled": false
+      },
+      "selected_rank": 1,
+      "observations": [
+        "cycle_00/pickup",
+        "cycle_00/placement"
+      ],
+      "unexpected_contacts": [],
+      "mujoco_warnings": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "detail_report": "docs/vision_runs/cube_regression/result.json"
+    }
+  ],
+  "limitations": [
+    "current tabletop with one upright small rigid bottle or cube",
+    "bottle body fit assumes a visible lower cylindrical wall and uses scene-scale height bands",
+    "sampled local IK/collision checks; no global obstacle planner",
+    "perception updates after placement/recovery; preview is live during motion, not continuous visual servo"
+  ],
+  "camera": {
+    "name": "wrist",
+    "parent_body": "wrist_camera_mount",
+    "attached_to": "gripper_base",
+    "resolution": [
+      1280,
+      960
+    ],
+    "vertical_fov_degrees": 120,
+    "uses_exposure_time_extrinsics": true,
+    "housing_mass_and_collision_modeled": false,
+    "mounting_surface": "front centre of transverse gripper support above fingers",
+    "mount_position_in_gripper_base_m": [
+      -0.055,
+      0,
+      0.048
+    ],
+    "tilt_degrees": 0,
+    "long_standoff": false,
+    "aligned_with_gripper_support": true,
+    "preview": {
+      "enabled_by_default_in_vision_viewer": true,
+      "display": "RGB and metric depth insets",
+      "source_resolution": [
+        320,
+        240
+      ],
+      "max_fps_simulation_time": 10,
+      "headless_disabled": true
+    }
+  },
+  "model_sha256": "7384ee9b1fdc7b12d6c3e6bce276104f162524db86ea0a65fa7a75ad6081a3b7",
+  "default_object": "bottle",
+  "scene_files_sha256": {
+    "scene.xml": "e7d64d4e5e830d74d4d5afc23675fd277c5de5cf20f97bc96510a2916b912257",
+    "piperx.xml": "7384ee9b1fdc7b12d6c3e6bce276104f162524db86ea0a65fa7a75ad6081a3b7",
+    "bottle.xml": "782d0fc053bceafccf6b97dde8953b47eb1091a84f3a08583e6324c72e048144"
+  },
+  "grasp_visualization": {
+    "frame": "world",
+    "target": "selected pickup TCP; fixed after selection",
+    "three_dimensional_geometry": "visual scene only; no physical model edits",
+    "axes": {
+      "X": "red",
+      "Y": "green; opening",
+      "Z": "blue; approach"
+    },
+    "gripper_outline": "cyan",
+    "approach_arrow": "yellow",
+    "rgb_projection_uses_current_camera": true,
+    "default_inspection_pause_seconds": 2,
+    "verification": [
+      {
+        "name": "grasp_pose_default",
+        "success": true,
+        "lift_height_m": 0.09856940287138405,
+        "placement_error_m": 0.0007560315621189014,
+        "displayed_grasps": 1,
+        "viewer_enabled": false,
+        "detail_report": "docs/vision_runs/grasp_pose_default/result.json"
+      },
+      {
+        "name": "grasp_pose_gui",
+        "success": true,
+        "lift_height_m": 0.09856940287138405,
+        "placement_error_m": 0.0007560315621189014,
+        "displayed_grasps": 1,
+        "viewer_enabled": true,
+        "detail_report": "docs/vision_runs/grasp_pose_gui/result.json"
+      }
+    ]
+  }
+}

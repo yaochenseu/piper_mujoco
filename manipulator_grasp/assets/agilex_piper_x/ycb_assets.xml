@@ -1,0 +1,29 @@
+<mujocoinclude>
+  <asset>
+    <mesh name="banana_visual" file="ycb/banana/visual.obj"/>
+    <mesh name="banana_collision_00" file="ycb/banana/collision_00.obj"/>
+    <mesh name="banana_collision_01" file="ycb/banana/collision_01.obj"/>
+    <mesh name="banana_collision_02" file="ycb/banana/collision_02.obj"/>
+    <mesh name="banana_collision_03" file="ycb/banana/collision_03.obj"/>
+    <mesh name="banana_collision_04" file="ycb/banana/collision_04.obj"/>
+    <mesh name="banana_collision_05" file="ycb/banana/collision_05.obj"/>
+    <texture name="banana_tex" type="2d" file="ycb/banana/texture.png"/>
+    <material name="banana_mat" texture="banana_tex" specular="0.2" shininess="0.3"/>
+    <mesh name="strawberry_visual" file="ycb/strawberry/visual.obj"/>
+    <mesh name="strawberry_collision_00" file="ycb/strawberry/collision_00.obj"/>
+    <texture name="strawberry_tex" type="2d" file="ycb/strawberry/texture.png"/>
+    <material name="strawberry_mat" texture="strawberry_tex" specular="0.2" shininess="0.3"/>
+    <mesh name="pear_visual" file="ycb/pear/visual.obj"/>
+    <mesh name="pear_collision_00" file="ycb/pear/collision_00.obj"/>
+    <texture name="pear_tex" type="2d" file="ycb/pear/texture.png"/>
+    <material name="pear_mat" texture="pear_tex" specular="0.2" shininess="0.3"/>
+    <mesh name="tennis_ball_visual" file="ycb/tennis_ball/visual.obj"/>
+    <mesh name="tennis_ball_collision_00" file="ycb/tennis_ball/collision_00.obj"/>
+    <texture name="tennis_ball_tex" type="2d" file="ycb/tennis_ball/texture.png"/>
+    <material name="tennis_ball_mat" texture="tennis_ball_tex" specular="0.2" shininess="0.3"/>
+    <mesh name="tomato_soup_can_visual" file="ycb/tomato_soup_can/visual.obj"/>
+    <mesh name="tomato_soup_can_collision_00" file="ycb/tomato_soup_can/collision_00.obj"/>
+    <texture name="tomato_soup_can_tex" type="2d" file="ycb/tomato_soup_can/texture.png"/>
+    <material name="tomato_soup_can_mat" texture="tomato_soup_can_tex" specular="0.2" shininess="0.3"/>
+  </asset>
+</mujocoinclude>

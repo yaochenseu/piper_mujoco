@@ -1,0 +1,18 @@
+{
+  "ok": true,
+  "image": "/media/yzc/F/DOGcode/others/Piper_Mujoco_Sim/docs/screenshots/detection_visualization.jpg",
+  "instruction": "拿香蕉放到右边",
+  "planner": "openai-compatible",
+  "target_phrase": "banana",
+  "target_key": "banana",
+  "spatial_reference": "none",
+  "action": "pick_place",
+  "destination": "right",
+  "dino_prompt": "banana .",
+  "raw": {
+    "target_phrase": "banana",
+    "spatial_reference": "none",
+    "action": "pick_place",
+    "destination": "right"
+  }
+}

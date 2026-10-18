@@ -1,0 +1,75 @@
+{
+  "python": "/home/yzc/miniconda3/envs/piper_mujoco/bin/python",
+  "environment": "/home/yzc/miniconda3/envs/piper_mujoco",
+  "checks": {
+    "packages": {
+      "ok": true,
+      "details": {
+        "numpy": "1.23.4",
+        "torch": "2.0.1+cu118",
+        "torchvision": "0.15.2+cu118",
+        "scipy": "1.10.1",
+        "opencv-python": "4.8.1.78",
+        "opencv-python-headless": "4.8.1.78",
+        "open3d": "0.18.0",
+        "Pillow": "10.4.0",
+        "matplotlib": "3.7.5",
+        "scikit-image": "0.21.0",
+        "scikit-learn": "1.3.2",
+        "ultralytics": "8.2.0",
+        "transformers": "4.38.2",
+        "timm": "0.9.16",
+        "supervision": "0.22.0",
+        "addict": "2.4.0",
+        "yapf": "0.40.1",
+        "pycocotools": "2.0.7",
+        "pyyaml": "6.0.3",
+        "python-dotenv": "1.2.4",
+        "tqdm": "4.70.1",
+        "wheel": "0.43.0",
+        "Cython": "0.29.37",
+        "ninja": "1.13.2",
+        "setuptools": "69.5.1"
+      }
+    },
+    "torch_cuda": {
+      "ok": true,
+      "details": {
+        "torch": "2.0.1+cu118",
+        "torchvision": "0.15.2+cu118",
+        "cuda": "11.8",
+        "gpu_available": true,
+        "gpu": "NVIDIA GeForce RTX 4060 Ti"
+      }
+    },
+    "pointnet2": {
+      "ok": true,
+      "details": "/home/yzc/miniconda3/envs/piper_mujoco/lib/python3.10/site-packages/pointnet2/_ext.cpython-310-x86_64-linux-gnu.so"
+    },
+    "knn": {
+      "ok": true,
+      "details": "/home/yzc/miniconda3/envs/piper_mujoco/lib/python3.10/site-packages/knn_pytorch/knn_pytorch.cpython-310-x86_64-linux-gnu.so"
+    },
+    "groundingdino": {
+      "ok": true,
+      "details": "/home/yzc/miniconda3/envs/piper_mujoco/lib/python3.10/site-packages/groundingdino/_C.cpython-310-x86_64-linux-gnu.so"
+    },
+    "graspnet_api": {
+      "ok": true,
+      "details": {
+        "module": "/media/yzc/F/DOGcode/others/Piper_Mujoco_Sim/graspnet-baseline/graspnetAPI/graspnetAPI/__init__.py",
+        "nms": "OK"
+      }
+    },
+    "graspnet_model": {
+      "ok": true,
+      "details": {
+        "parameters": 1025964,
+        "untrained_forward_shape": [
+          1014,
+          17
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,72 @@
+{
+  "python": "/home/yzc/miniconda3/envs/piper_mujoco/bin/python",
+  "gpu": "NVIDIA GeForce RTX 4060 Ti",
+  "checks": {
+    "graspnet": {
+      "ok": true,
+      "details": {
+        "checkpoint": {
+          "path": "weights/logs/log_rs/checkpoint-rs.tar",
+          "bytes": 12468415,
+          "sha256": "60680087c61cba2b6791614fef1519071e294f6dcaf99b3f581bb95f7c51a868"
+        },
+        "synthetic_cloud_grasp_shape": [
+          78,
+          17
+        ]
+      }
+    },
+    "groundingdino": {
+      "ok": true,
+      "details": {
+        "checkpoint": {
+          "path": "weights/groundingdino_swint_ogc.pth",
+          "bytes": 693997677,
+          "sha256": "3b3ca2563c77c69f651d7bd133e97139c186df06231157a64c507099c52bc799"
+        },
+        "detections": 2,
+        "labels": [
+          "cat",
+          "dog"
+        ],
+        "bert": "weights/bert-base-uncased (offline)"
+      }
+    },
+    "sam": {
+      "ok": true,
+      "details": {
+        "checkpoint": {
+          "path": "weights/sam_b.pt",
+          "bytes": 375042383,
+          "sha256": "ec2df62732614e57411cdcf32a23ffdf28910380d03139ee0f4fcbe91eb8c912"
+        },
+        "mask_shape": [
+          1,
+          901,
+          1200
+        ],
+        "foreground_pixels": 176353
+      }
+    },
+    "yolo": {
+      "ok": true,
+      "details": {
+        "checkpoint": {
+          "path": "weights/yolov8s-world.pt",
+          "bytes": 27169314,
+          "sha256": "095f5266bb9b654bd5ad9e21e9cdeda78e0f2c8460f5d652eaf04bab7ee251cf"
+        },
+        "clip_checkpoint": {
+          "path": "weights/clip/ViT-B-32.pt",
+          "bytes": 353976522,
+          "sha256": "40d365715913c9da98579312b702a82c18be219cc2a73407c4526f58eba950af"
+        },
+        "detections": 2,
+        "classes": {
+          "0": "cat",
+          "1": "dog"
+        }
+      }
+    }
+  }
+}

@@ -62,6 +62,11 @@ def choose_model():
 
 def set_classes(model, target_class):
     """Set YOLO-World model to detect specific class"""
+    clip_checkpoint = os.path.join(_weights_dir, 'clip', 'ViT-B-32.pt')
+    if os.path.isfile(clip_checkpoint) and getattr(model.model, 'clip_model', None) is None:
+        import clip
+        device = next(model.model.parameters()).device
+        model.model.clip_model = clip.load(clip_checkpoint, device=device)[0]
     model.set_classes([target_class])
 
 def detect_objects_dinoground(image, text_prompt: str, plot_bbox: bool = True):
@@ -106,7 +111,7 @@ def detect_objects(image_or_path, target_class=None):
     image_or_path: can be a file path (str) or a numpy array (image).
     Returns: (list of bboxes in xyxy format, detected classes list, visualization image)
     """
-    model = YOLO("yolov8s-world.pt")
+    model = YOLO(os.path.join(_weights_dir, 'yolov8s-world.pt'))
     if target_class:
         set_classes(model, target_class)
     # YOLOv8 的 predict 可同时处理 文件路径(str) 或 图像数组(np.ndarray)

@@ -1,0 +1,25 @@
+<mujocoinclude>
+  <body name="target" pos=".42 -.12 .764">
+    <freejoint name="target_free"/>
+
+    <!-- Main body: cylinder, bottom flush at table height -->
+    <geom name="target_geom" type="cylinder" size=".017 .022" mass=".029"
+          rgba="0.12 0.28 0.75 1" friction="1 .02 .002" solref=".005 1"/>
+
+    <!-- Shoulder: ellipsoid dome on top of the cylinder -->
+    <geom name="target_shoulder" type="ellipsoid" pos="0 0 .023" size=".017 .017 .009" mass=".007"
+          rgba="0.12 0.28 0.75 1" friction="1 .02 .002" solref=".005 1"/>
+
+    <!-- Neck -->
+    <geom name="target_neck" type="cylinder" pos="0 0 .036" size=".008 .009" mass=".003"
+          rgba="0.12 0.28 0.75 1" friction="1 .02 .002" solref=".005 1"/>
+
+    <!-- Orange cap -->
+    <geom name="target_cap" type="cylinder" pos="0 0 .047" size=".009 .004" mass=".001"
+          rgba="0.95 0.45 0.05 1" friction="1 .02 .002" solref=".005 1"/>
+
+    <!-- White label band: visual only, no collision, no mass -->
+    <geom name="target_label" type="cylinder" pos="0 0 0" size=".0172 .007" mass="0"
+          contype="0" conaffinity="0" rgba="0.95 0.95 0.95 1"/>
+  </body>
+</mujocoinclude>

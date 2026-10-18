@@ -1,0 +1,24 @@
+<mujocoinclude>
+  <!-- Extra graspable objects. Table top is at z = .740; each body rests with a 2mm gap. -->
+
+  <!-- Purple cube: distinct from the red target in --object cube mode. -->
+  <body name="extra_cube" pos=".50 -.23 .760">
+    <freejoint name="extra_cube_free"/>
+    <geom name="extra_cube_geom" type="box" size=".018 .018 .018" mass=".04"
+          rgba="0.60 0.16 0.72 1" friction="1 .02 .002" solref=".005 1"/>
+  </body>
+
+  <!-- Green rectangular block: 30 x 44 x 54 mm, bottom at .742. -->
+  <body name="extra_block" pos=".55 -.04 .769">
+    <freejoint name="extra_block_free"/>
+    <geom name="extra_block_geom" type="box" size=".015 .022 .027" mass=".04"
+          rgba="0.12 0.60 0.20 1" friction="1 .02 .002" solref=".005 1"/>
+  </body>
+
+  <!-- Yellow cylinder: radius .018, half-height .025, bottom at .767 - .025 = .742 -->
+  <body name="extra_cylinder" pos=".33 -.27 .767">
+    <freejoint name="extra_cylinder_free"/>
+    <geom name="extra_cylinder_geom" type="cylinder" size=".018 .025" mass=".04"
+          rgba="0.95 0.82 0.10 1" friction="1 .02 .002" solref=".005 1"/>
+  </body>
+</mujocoinclude>
