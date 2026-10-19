@@ -11,8 +11,6 @@ import urllib.request
 import numpy as np
 from PIL import Image
 
-from utils.piperx_semantic import OBJECTS, resolve_target
-
 
 SYSTEM_PROMPT = """You are the semantic planner for a tabletop robot.
 GroundingDINO accepts arbitrary short English visual noun phrases; it does not
@@ -48,7 +46,6 @@ class VLMError(RuntimeError):
 class SemanticPlan:
     instruction: str
     target_phrase: str
-    target_key: str | None
     target_label: str
     action: str
     destination: str
@@ -119,8 +116,7 @@ def infer_spatial_reference(instruction):
     # contain 的/那个 and is handled as a destination instead.
     if re.search(r"(?:左|右)(?:侧|边)?(?:的|那个|那只|那件|那)", text):
         return "leftmost" if re.search(r"左(?:侧|边)?(?:的|那个|那只|那件|那)", text) else "rightmost"
-    object_words = r"(?:banana|strawberry|pear|tennis|ball|can|object|item|one)"
-    match = re.search(rf"\b(left|right)\s+{object_words}\b", text)
+    match = re.search(r"\b(left|right)\s+([a-z0-9]+)\b", text)
     if match:
         return "leftmost" if match.group(1) == "left" else "rightmost"
     return "none"
@@ -165,12 +161,6 @@ def extract_json_object(text):
 def plan_from_payload(payload, instruction, backend):
     phrase = payload.get("target_phrase") or payload.get("target") or payload.get("object")
     phrase = normalize_phrase(phrase)
-    requested_key = payload.get("target_key")
-    spec = resolve_target(requested_key or phrase or instruction)
-    if spec is None:
-        spec = resolve_target(instruction)
-    target_key = spec.key if spec is not None else None
-    target_label = spec.label if spec is not None else phrase
     action = str(payload.get("action") or "pick_place").strip().casefold()
     if action not in ("pick_place", "pick"):
         action = "pick_place"
@@ -180,8 +170,7 @@ def plan_from_payload(payload, instruction, backend):
     return SemanticPlan(
         instruction=instruction,
         target_phrase=phrase,
-        target_key=target_key,
-        target_label=target_label,
+        target_label=phrase,
         action=action,
         destination=destination,
         spatial_reference=spatial_reference,
@@ -191,17 +180,56 @@ def plan_from_payload(payload, instruction, backend):
     )
 
 
+_PLACEMENT_TAIL = re.compile(
+    r"(?:放到|放在|搬到|移到|摆到|送到|丢到|置于|放入).*$",
+    re.IGNORECASE)
+_ENGLISH_PLACEMENT = re.compile(
+    r"\b(?:put|place|move|bring)\s+(?:the\s+)?(.+?)\s+"
+    r"(?:on|to|at|into|in)\s+(?:the\s+)?(?:left|right|front|back|center)\b",
+    re.IGNORECASE)
+_ACTION_PREFIX = re.compile(
+    r"^(?:请|帮我|帮忙|给我|我想要|我要|想要|想|要|把|将|"
+    r"pick\s+up|pick|grab|grasp|take|lift|get|fetch|"
+    r"抓取|抓住|抓起|拿起|拿取|拿到|拿|取|拾取|捡起|夹起|夹住|夹|捏起|挑选|找出)\s*",
+    re.IGNORECASE)
+_TARGET_SIDE = re.compile(r"(?:最)?(?:左|右)(?:侧|边)?(?:的|那个|那只|那件|那)?")
+_ENGLISH_SIDE = re.compile(r"\b(?:leftmost|rightmost|left|right)\b", re.IGNORECASE)
+_DEMONSTRATIVE = re.compile(r"(?:那个|那只|那件|这个|这只|这件|一个|一只|一台|一把)")
+_ENGLISH_ARTICLE = re.compile(r"\b(?:the|a|an)\b", re.IGNORECASE)
+
+
+def _rule_target_phrase(instruction):
+    text = str(instruction or "").strip()
+    match = _ENGLISH_PLACEMENT.search(text)
+    if match:
+        text = match.group(1)
+    else:
+        text = _PLACEMENT_TAIL.sub("", text)
+    while text:
+        stripped = _ACTION_PREFIX.sub("", text).strip()
+        if stripped == text:
+            break
+        text = stripped
+    text = _TARGET_SIDE.sub(" ", text)
+    text = _ENGLISH_SIDE.sub(" ", text)
+    text = _DEMONSTRATIVE.sub(" ", text)
+    text = _ENGLISH_ARTICLE.sub(" ", text)
+    text = re.sub(r"\s+", " ", text).strip(" .,，。!！?？")
+    text = text.strip("的").strip()
+    return text
+
+
 class RuleSemanticPlanner:
     name = "rules"
 
     def plan(self, rgb, instruction, *, scene_context=None):
-        spec = resolve_target(instruction)
-        if spec is None:
-            choices = ", ".join(OBJECTS)
-            raise VLMError(f"No registered object in instruction {instruction!r}; choose one of: {choices}")
+        phrase = _rule_target_phrase(instruction)
+        if not phrase:
+            raise VLMError(
+                f"No target phrase found in instruction {instruction!r}; "
+                "pass --text or use the openai semantic backend")
         payload = {
-            "target_phrase": spec.label,
-            "target_key": spec.key,
+            "target_phrase": phrase,
             "spatial_reference": infer_spatial_reference(instruction),
             "action": "pick_place",
             "destination": normalize_destination(None, instruction),
@@ -303,7 +331,7 @@ class FallbackSemanticPlanner:
             return self.fallback.plan(rgb, instruction, scene_context=scene_context)
 
 
-def build_semantic_planner(backend="auto", *, base_url=None, model=None, timeout=60.0,
+def build_semantic_planner(backend="openai", *, base_url=None, model=None, timeout=60.0,
                            max_tokens=2048, log=print):
     rules = RuleSemanticPlanner()
     base_url = base_url or os.environ.get("PIPERX_VLM_BASE_URL", "")
@@ -313,11 +341,26 @@ def build_semantic_planner(backend="auto", *, base_url=None, model=None, timeout
     if backend not in ("auto", "openai"):
         raise ValueError("semantic backend must be auto, rules, or openai")
     if not base_url or not model:
-        if backend == "openai":
-            raise ValueError("--vlm-base-url and --vlm-model are required for the openai backend")
-        return rules
+        raise ValueError(
+            "The openai semantic backend requires PIPERX_VLM_BASE_URL and "
+            "PIPERX_VLM_MODEL (or --vlm-base-url/--vlm-model). Set both "
+            "environment variables, pass --text to skip instruction parsing, "
+            "or use --semantic-backend rules")
     remote = OpenAICompatiblePlanner(base_url, model, timeout=timeout, max_tokens=max_tokens)
     return FallbackSemanticPlanner(remote, rules, log=log) if backend == "auto" else remote
+
+
+def semantic_match_score(label, target_phrase=None):
+    """Score a detector label against an open-vocabulary target phrase."""
+    label_text = str(label or "").strip().casefold().rstrip(". ")
+    request = str(target_phrase or "").strip().casefold().rstrip(". ")
+    if not label_text:
+        return 0
+    if request and (label_text == request or label_text in request or request in label_text):
+        return 4 + len(request)
+    label_words = set(re.findall(r"[a-z0-9]+", label_text))
+    request_words = set(re.findall(r"[a-z0-9]+", request))
+    return 2 * len(label_words & request_words)
 
 
 def drop_xy_for_plan(plan, *, drop_x=None, drop_y=None):

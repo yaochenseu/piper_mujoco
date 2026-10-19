@@ -6,7 +6,7 @@ import time
 import mujoco
 import numpy as np
 
-from utils.piperx_semantic import DEFAULT_OBJECT, resolve_target, target_choices
+from utils.piperx_scene import scene_bodies
 
 
 SCENE = Path(__file__).resolve().parents[1] / "assets/agilex_piper_x/scene.xml"
@@ -20,7 +20,7 @@ class IKError(RuntimeError):
 
 class PiperXGraspEnv:
     def __init__(self, *, viewer=False, realtime=True, scene=SCENE, render_size=None,
-                 target=DEFAULT_OBJECT):
+                 target=None):
         if not Path(scene).is_file() or not Path(scene).with_name("piperx.xml").is_file():
             raise FileNotFoundError("Run python scripts/build_piperx_model.py first")
         self.model = mujoco.MjModel.from_xml_path(str(scene))
@@ -42,8 +42,8 @@ class PiperXGraspEnv:
         self.finger_indices = np.array([self.model.joint(f"gripper_joint{i}").qposadr[0] for i in (1, 2)])
         self.limits = self.model.jnt_range[self.joint_ids].copy()
         self.tcp_id = self.model.site("tcp").id
-        self.target_spec = None
         self.target_key = ""
+        self.target_label = ""
         self.target_body = ""
         self.target_body_id = -1
         self.target_free_joint_name = ""
@@ -72,23 +72,35 @@ class PiperXGraspEnv:
             self.viewer.cam.elevation = -25
 
     def set_target(self, target):
-        """Select a registered semantic object without changing the world."""
-        spec = target if hasattr(target, "body") else resolve_target(target)
-        if spec is None or spec.key not in target_choices():
-            choices = ", ".join(target_choices())
-            raise ValueError(f"Unknown target {target!r}; choose one of: {choices}")
-        body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, spec.body)
-        if body_id < 0:
-            raise ValueError(f"Target body {spec.body!r} is missing from the scene")
-        joint_name = f"{spec.body}_free"
-        joint_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)
-        if joint_id < 0 or int(self.model.jnt_type[joint_id]) != int(mujoco.mjtJoint.mjJNT_FREE):
-            raise ValueError(f"Target free joint {joint_name!r} is missing from the scene")
+        """Select any free-body name; None means no target is selected."""
+        if target is None:
+            self.target_key = ""
+            self.target_label = ""
+            self.target_body = ""
+            self.target_body_id = -1
+            self.target_free_joint_name = ""
+            self.target_geom_ids = np.empty(0, dtype=int)
+            self.max_object_height = 0.0
+            self.bilateral_contacts = False
+            return
+        if hasattr(target, "body"):
+            body_name = str(target.body)
+            key = str(getattr(target, "key", body_name))
+            label = str(getattr(target, "label", body_name))
+        else:
+            body_name = str(target)
+            key = label = body_name
+        bodies = scene_bodies(self)
+        if body_name not in bodies:
+            choices = ", ".join(sorted(bodies))
+            raise ValueError(f"Unknown target body {body_name!r}; choose one of: {choices}")
+        body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, body_name)
+        joint_name = bodies[body_name]
         geom_start = int(self.model.body_geomadr[body_id])
         geom_count = int(self.model.body_geomnum[body_id])
-        self.target_spec = spec
-        self.target_key = spec.key
-        self.target_body = spec.body
+        self.target_key = key
+        self.target_label = label
+        self.target_body = body_name
         self.target_body_id = int(body_id)
         self.target_free_joint_name = joint_name
         self.target_geom_ids = np.arange(geom_start, geom_start + geom_count, dtype=int)
@@ -108,13 +120,16 @@ class PiperXGraspEnv:
         self.data.ctrl[self.arm_actuators] = home
         self.data.ctrl[self.gripper_actuator] = 0.1
         mujoco.mj_forward(self.model, self.data)
-        self.max_object_height = float(self.object_position[2])
+        self.max_object_height = (float(self.object_position[2])
+                                  if self.target_body_id >= 0 else 0.0)
         self.bilateral_contacts = False
         self._start_wall = time.monotonic()
         self._next_sync = 0.0
 
     @property
     def object_position(self):
+        if self.target_body_id < 0:
+            raise RuntimeError("No target body selected; call set_target() first")
         return self.data.xipos[self.target_body_id].copy()
 
     @property
@@ -202,7 +217,8 @@ class PiperXGraspEnv:
         mujoco.mj_step(self.model, self.data)
         if not np.isfinite(self.data.qpos).all():
             raise RuntimeError("Simulation became non-finite")
-        self.max_object_height = max(self.max_object_height, float(self.object_position[2]))
+        if self.target_body_id >= 0:
+            self.max_object_height = max(self.max_object_height, float(self.object_position[2]))
         finger_contacts = set()
         target_geoms = self.target_geom_ids
         for contact in self.data.contact:

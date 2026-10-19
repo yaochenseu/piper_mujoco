@@ -5,10 +5,9 @@ import json
 import numpy as np
 
 from manipulator_grasp.env.piperx_grasp_env import PiperXGraspEnv, TOP_DOWN
-from utils.piperx_semantic import DEFAULT_OBJECT, target_choices
 
 
-def run_demo(env, *, drop_xy=(0.42, 0.16), log=print):
+def run_demo(env, *, drop_xy=(0.42, 0.16), grasp_yaw_deg=0.0, log=print):
     env.wait(0.4)
     initial = env.object_position
     log(f"Target: {initial.round(4).tolist()}")
@@ -17,7 +16,7 @@ def run_demo(env, *, drop_xy=(0.42, 0.16), log=print):
     grasp = initial.copy()
     grasp[2] += 0.003
     above = grasp + [0, 0, 0.06]
-    yaw = np.deg2rad(env.target_spec.grasp_yaw_deg)
+    yaw = np.deg2rad(grasp_yaw_deg)
     grasp_rotation = np.array([[np.cos(yaw), -np.sin(yaw), 0.0],
                                [np.sin(yaw), np.cos(yaw), 0.0],
                                [0.0, 0.0, 1.0]]) @ TOP_DOWN
@@ -67,13 +66,16 @@ def main():
     parser.add_argument("--headless", action="store_true", help="Run physics without opening a viewer")
     parser.add_argument("--fast", action="store_true", help="Do not synchronize viewer to real time")
     parser.add_argument("--hold", action="store_true", help="Keep viewer open after the grasp")
-    parser.add_argument("--target", choices=target_choices(), default=DEFAULT_OBJECT,
-                        help="Semantic tabletop object to pick and place")
+    parser.add_argument("--target", default="ycb_banana",
+                        help="Scene body name to pick and place")
+    parser.add_argument("--grasp-yaw-deg", type=float, default=0.0,
+                        help="Top-down grasp yaw around the world Z axis (degrees)")
     args = parser.parse_args()
     try:
         with PiperXGraspEnv(viewer=not args.headless, realtime=not args.fast,
                            target=args.target) as env:
-            run_demo(env)
+            env.set_target(args.target)
+            run_demo(env, grasp_yaw_deg=args.grasp_yaw_deg)
             if args.hold and not args.headless:
                 while env.viewer.is_running():
                     env.step()

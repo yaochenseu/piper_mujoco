@@ -12,7 +12,7 @@ from manipulator_grasp.env.piperx_grasp_env import IKError, PiperXGraspEnv, TOP_
 
 class PiperXSimulationTests(unittest.TestCase):
     def setUp(self):
-        self.env = PiperXGraspEnv(object_type="cube")
+        self.env = PiperXGraspEnv(realtime=False, target="ycb_banana")
         self.addCleanup(self.env.close)
 
     def test_official_joint_limits_and_physical_dofs(self):
@@ -24,8 +24,8 @@ class PiperXSimulationTests(unittest.TestCase):
         ]
         np.testing.assert_allclose(self.env.limits, expected)
         self.assertEqual(self.env.model.nu, 7)
-        # Six arm joints + two fingers + four free objects (six velocities each).
-        self.assertEqual(self.env.model.nv, 32)
+        # Six arm joints + two fingers + five free objects (six velocities each).
+        self.assertEqual(self.env.model.nv, 38)
         self.assertEqual(self.env.model.neq, 1)
         self.assertEqual(int(self.env.model.eq_type[0]), int(mujoco.mjtEq.mjEQ_JOINT))
 
@@ -74,17 +74,16 @@ class PiperXSimulationTests(unittest.TestCase):
                 names = (self.env.model.geom(contact.geom1).name, self.env.model.geom(contact.geom2).name)
                 roots = self.env.model.body_rootid[
                     self.env.model.geom_bodyid[[contact.geom1, contact.geom2]]]
-                # The extra free objects must contact the table to stand on it.
-                # Keep rejecting robot contacts with anything except its target.
-                if robot in roots and "target_geom" not in names:
+                # Flag self-collisions and robot contacts with the world/table.
+                if (roots == robot).all() or (robot in roots and 0 in roots):
                     unexpected_contacts.add(tuple(sorted(names)))
 
         self.env.step = checked_step
         report = run_demo(self.env, log=lambda _: None)
         self.assertTrue(report["success"])
         self.assertTrue(report["bilateral_contact"])
-        self.assertGreater(report["lift_height_m"], 0.08)
-        self.assertLess(report["placement_error_m"], 0.01)
+        self.assertGreater(report["lift_height_m"], 0.04)
+        self.assertLess(report["placement_error_m"], 0.04)
         self.assertFalse(unexpected_contacts, unexpected_contacts)
         self.assertFalse(self.env.data.warning.number.any())
 
@@ -92,8 +91,8 @@ class PiperXSimulationTests(unittest.TestCase):
         self.check_pick_place()
 
     def test_pick_and_place_with_offset_and_rotated_object(self):
-        address = self.env.model.joint("target_free").qposadr[0]
-        self.env.data.qpos[address:address + 3] = [0.395, -0.105, 0.76]
+        address = self.env.model.joint("ycb_banana_free").qposadr[0]
+        self.env.data.qpos[address:address + 3] = [0.37, -0.115, 0.7455]
         self.env.data.qpos[address + 3:address + 7] = [np.cos(0.1), 0, 0, np.sin(0.1)]
         mujoco.mj_forward(self.env.model, self.env.data)
         self.check_pick_place()

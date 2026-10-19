@@ -29,7 +29,8 @@ Piper_Mujoco_Sim/
 │   ├── sim_piper.yaml               # Piper sim camera + GraspNet params
 │   ├── sim_ur5.yaml                 # UR5 sim camera + GraspNet params
 │   ├── real_piper.yaml              # D435i intrinsics + data dirs
-│   └── cv.yaml                      # GroundingDINO / SAM weight paths
+│   ├── cv.yaml                      # GroundingDINO / SAM weight paths
+│   └── piperx_scene.yaml            # PiperX YCB scene manifest
 │
 ├── manipulator_grasp/               # Robot envs, controllers, motion planning
 │   ├── assets/                      # MJCF/URDF models (Piper, UR5e, Robotiq, fruits)
@@ -238,22 +239,23 @@ conda activate piper_mujoco
 python main_piperx.py --hold
 ```
 
-使用官方 Piper X + AGX 平行夹爪模型，完成瓶子的接近、抓取、搬运和放置；增加 `--object cube` 可切回原红色方块。
+使用官方 Piper X + AGX 平行夹爪模型，完成场景物体的接近、抓取、搬运和放置。
+`--target` 接受场景 body 名（默认 `ycb_banana`），`--grasp-yaw-deg` 设置顶抓绕世界 Z 轴的偏航角。
 基础演示只依赖 NumPy 和 MuJoCo，使用物体已知坐标，不需要视觉权重。
 无窗口验收可运行 `python main_piperx.py --headless`。
 
 已安装视觉依赖和权重时，可直接运行视觉引导抓取：
 
 ```bash
-python main_piperx_vision.py --hold
-# 切回红方块：python main_piperx_vision.py --object cube --hold
+python main_piperx_vision.py --target "banana ." --hold
+python main_piperx_vision.py --instruction "把草莓放到右边" --hold
 # 抓取前停留 10 秒查看位姿：增加 --grasp-preview-seconds 10
 # 无窗口：增加 --headless --fast，去掉 --hold
 ```
 
-视觉入口默认抓取蓝色瓶子，检测提示词随物体选项自动切换。相机直接安装在夹爪横向支架前侧；窗口右上角显示实时腕部 RGB 和深度画面，增加 `--no-camera-preview` 可隐藏。程序使用拍摄时的外参转换抓取位姿，预检查整条轨迹、用当前触觉确认夹持，放置后重新拍摄确认；失败时在尝试次数内恢复并重新感知。
+视觉入口是开放词汇的：`--instruction` 由 VLM 自由生成 GroundingDINO 提示词，`--target`/`--text` 也可直接给出任意提示词；分割后按点云质心匹配最近的场景 free-joint body（阈值 0.06 m），不需要目标白名单。场景物体清单（5 个 YCB 物体）在 `configs/piperx_scene.yaml`。相机直接安装在夹爪横向支架前侧；窗口右上角显示实时腕部 RGB 和深度画面，增加 `--no-camera-preview` 可隐藏。程序使用拍摄时的外参转换抓取位姿，预检查整条轨迹、用当前触觉确认夹持，放置后重新拍摄确认；失败时在尝试次数内恢复并重新感知。
 
-语义指令入口支持左、右、前、后、中间五种放置方向；其中 `right` 已完成完整抓放验收，其余方向目前使用固定世界坐标，尚需逐项验证。方向和落点的详细限制见 [Piper X 仿真说明](docs/piperx_sim.md#语义指令与放置方向)。
+`--semantic-backend` 默认 `openai`，需要设置 `PIPERX_VLM_BASE_URL` 和 `PIPERX_VLM_MODEL`；也可显式使用 `--semantic-backend rules`，或用 `--text` 跳过语义解析。语义指令入口支持左、右、前、后、中间五种放置方向；其中 `right` 已完成完整抓放验收，其余方向目前使用固定世界坐标，尚需逐项验证。方向和落点的详细限制见 [Piper X 仿真说明](docs/piperx_sim.md#语义指令与放置方向)。
 
 最终选中的抓取位姿会显示在三维场景和腕部 RGB 图中：红/绿/蓝为 TCP 的 X/Y/Z 轴，青色为夹爪轮廓，黄色为接近方向。窗口左下角显示世界坐标下的 XYZ、RPY 和开口；默认抓取前停留 2 秒，`--grasp-preview-seconds 0` 可取消停留。
 模型生成方式、控制约定和视觉接入状态见 [Piper X 仿真说明](docs/piperx_sim.md)。

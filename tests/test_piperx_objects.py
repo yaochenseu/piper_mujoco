@@ -1,63 +1,106 @@
-"""Rigid bottle physics and preservation of the original cube option."""
+"""Scene manifest loading, free-body enumeration and point-cloud matching."""
 import unittest
 
-import mujoco
 import numpy as np
 
-from main_piperx import run_demo
 from manipulator_grasp.env.piperx_grasp_env import PiperXGraspEnv
-from utils.piperx_bottle_grasp import fit_bottle_body
+from utils.config import load_config
+from utils.piperx_scene import (
+    OBJECT_CLEARANCE_Z,
+    TABLE_TOP_Z,
+    resolve_scene_body,
+    scene_bodies,
+)
 
 
-class ObjectTests(unittest.TestCase):
-    def test_bottle_is_one_free_rigid_body(self):
-        with PiperXGraspEnv(realtime=False, object_type="bottle") as env:
-            target = env.model.body("target")
-            self.assertAlmostEqual(float(target.mass[0]), 0.04)
-            self.assertEqual(env.model.nv, 32)  # Arm/fingers + four free objects.
-            self.assertEqual(env.model.neq, 1)  # Only the finger coupling.
-            self.assertEqual(int(env.model.joint("target_free").type[0]),
-                             int(mujoco.mjtJoint.mjJNT_FREE))
-            for name in ("target_geom", "target_shoulder", "target_neck", "target_cap"):
-                geom = env.model.geom(name)
-                self.assertEqual(int(geom.bodyid[0]), target.id)
-                self.assertNotEqual(int(geom.contype[0]), 0)
-            self.assertEqual(int(env.model.geom("target_label").contype[0]), 0)
+EXPECTED_BODIES = {
+    "ycb_banana",
+    "ycb_pear",
+    "ycb_strawberry",
+    "ycb_tennis_ball",
+    "ycb_tomato_soup_can",
+}
 
-    def test_bottle_pick_place_uses_contacts(self):
-        with PiperXGraspEnv(realtime=False, object_type="bottle") as env:
-            report = run_demo(env, log=lambda _: None)
-            self.assertTrue(report["success"])
-            self.assertTrue(report["bilateral_contact"])
-            self.assertGreater(report["lift_height_m"], 0.08)
-            self.assertFalse(env.data.warning.number.any())
 
-    def test_cube_replaces_all_bottle_parts(self):
-        with PiperXGraspEnv(realtime=False, object_type="cube") as env:
-            self.assertEqual(env.object_type, "cube")
-            self.assertEqual(int(env.model.geom("target_geom").type[0]),
-                             int(mujoco.mjtGeom.mjGEOM_BOX))
-            self.assertEqual(mujoco.mj_name2id(env.model, mujoco.mjtObj.mjOBJ_GEOM,
-                                             "target_neck"), -1)
-            self.assertAlmostEqual(float(env.model.body("target").mass[0]), 0.04)
+class SceneManifestTests(unittest.TestCase):
+    def test_yaml_manifest_matches_runtime_constants(self):
+        config = load_config("piperx_scene.yaml")
+        self.assertAlmostEqual(float(config["table_top_z"]), TABLE_TOP_Z)
+        self.assertAlmostEqual(float(config["object_clearance_z"]), OBJECT_CLEARANCE_Z)
+        bodies = [entry["body"] for entry in config["objects"]]
+        self.assertEqual(set(bodies), EXPECTED_BODIES)
+        self.assertEqual(len(bodies), len(set(bodies)))
 
-    def test_body_center_from_partially_visible_wall(self):
-        angle, z = np.meshgrid(np.linspace(-0.9, 0.9, 80), np.linspace(0.744, 0.782, 50))
-        points = np.column_stack((0.42 + 0.017 * np.cos(angle.ravel()),
-                                  -0.12 + 0.017 * np.sin(angle.ravel()), z.ravel()))
-        points += np.random.default_rng(4).normal(0, 0.00005, points.shape)
-        fit = fit_bottle_body(points)
-        np.testing.assert_allclose(fit["center"][:2], [0.42, -0.12], atol=0.0005)
-        self.assertAlmostEqual(fit["radius_m"], 0.017, delta=0.0005)
-        self.assertTrue(0.75 < fit["center"][2] < 0.78)
 
-    def test_body_fit_rejects_insufficient_geometry(self):
+class SceneBodyTests(unittest.TestCase):
+    def setUp(self):
+        self.env = PiperXGraspEnv(realtime=False)
+        self.addCleanup(self.env.close)
+
+    def test_scene_bodies_are_the_free_joint_objects(self):
+        bodies = scene_bodies(self.env)
+        self.assertEqual(set(bodies), EXPECTED_BODIES)
+        for body, joint in bodies.items():
+            self.assertEqual(joint, f"{body}_free")
+
+    def test_each_ycb_body_matches_its_own_cloud(self):
+        rng = np.random.default_rng(20261019)
+        for body in scene_bodies(self.env):
+            body_id = self.env.model.body(body).id
+            centre = self.env.data.xipos[body_id]
+            points = centre + rng.normal(0, 0.008, (200, 3))
+            matched, distance, report = resolve_scene_body(self.env, points)
+            self.assertEqual(matched, body)
+            self.assertLess(distance, 0.02)
+            distances = [entry["distance_m"] for entry in report["candidates"]]
+            self.assertEqual(distances, sorted(distances))
+
+    def test_far_cloud_matches_nothing(self):
+        points = np.tile([-0.5, -0.5, 1.2], (100, 1))
+        matched, distance, report = resolve_scene_body(self.env, points)
+        self.assertIsNone(matched)
+        self.assertGreater(distance, report["max_distance_m"])
+
+    def test_empty_cloud_is_rejected(self):
+        with self.assertRaises(ValueError):
+            resolve_scene_body(self.env, np.empty((0, 3)))
+
+    def test_set_target_accepts_any_scene_body_name(self):
+        self.env.set_target("ycb_tennis_ball")
+        self.assertEqual(self.env.target_key, "ycb_tennis_ball")
+        self.assertEqual(self.env.target_label, "ycb_tennis_ball")
+        self.assertEqual(self.env.target_body, "ycb_tennis_ball")
+        body_id = self.env.model.body("ycb_tennis_ball").id
+        np.testing.assert_allclose(self.env.object_position, self.env.data.xipos[body_id])
+
+    def test_set_target_accepts_object_with_body_attribute(self):
+        class Spec:
+            body = "ycb_pear"
+            key = "pear"
+            label = "pear"
+
+        self.env.set_target(Spec())
+        self.assertEqual(self.env.target_key, "pear")
+        self.assertEqual(self.env.target_label, "pear")
+        self.assertEqual(self.env.target_body, "ycb_pear")
+
+    def test_unknown_body_reports_candidates(self):
+        with self.assertRaises(ValueError) as context:
+            self.env.set_target("no_such_body")
+        message = str(context.exception)
+        self.assertIn("no_such_body", message)
+        for body in EXPECTED_BODIES:
+            self.assertIn(body, message)
+
+    def test_none_clears_target_and_blocks_object_position(self):
+        self.env.set_target("ycb_banana")
+        self.env.set_target(None)
+        self.assertEqual(self.env.target_body, "")
+        self.assertEqual(self.env.target_body_id, -1)
         with self.assertRaises(RuntimeError):
-            fit_bottle_body(np.ones((10, 3)))
-        # A single vertical line cannot determine a bottle axis/radius.
-        with self.assertRaises(RuntimeError):
-            fit_bottle_body(np.column_stack((np.zeros(100), np.zeros(100),
-                                            np.linspace(0.744, 0.81, 100))))
+            _ = self.env.object_position
+        self.env.step()
+        self.assertEqual(len(self.env.target_geom_ids), 0)
 
 
 if __name__ == "__main__":

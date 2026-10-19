@@ -10,14 +10,14 @@ from PIL import Image
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from utils.piperx_semantic import (  # noqa: E402
-    OBJECTS,
-    OBJECT_CLEARANCE_Z,
-    SCENE_ASSET_DIR,
-    TABLE_TOP_Z,
-)
+from utils.config import load_config  # noqa: E402
 
 
+SCENE_CONFIG = load_config("piperx_scene.yaml")
+OBJECTS = SCENE_CONFIG["objects"]
+TABLE_TOP_Z = float(SCENE_CONFIG["table_top_z"])
+OBJECT_CLEARANCE_Z = float(SCENE_CONFIG["object_clearance_z"])
+SCENE_ASSET_DIR = ROOT / "manipulator_grasp/assets/agilex_piper_x"
 SOURCE_ROOT = ROOT / "pybullet-object-models/pybullet_object_models/ycb_objects"
 OUTPUT_ROOT = SCENE_ASSET_DIR / "ycb"
 MAX_TEXTURE_SIZE = 1024
@@ -114,12 +114,13 @@ def yaw_quaternion(degrees):
 
 def write_assets(path):
     lines = ["<mujocoinclude>", "  <asset>"]
-    for spec in OBJECTS.values():
-        lines.append(f'    <mesh name="{spec.key}_visual" file="ycb/{spec.key}/visual.obj"/>')
-        for hull in sorted((OUTPUT_ROOT / spec.key).glob("collision_*.obj")):
-            lines.append(f'    <mesh name="{spec.key}_{hull.stem}" file="ycb/{spec.key}/{hull.name}"/>')
-        lines.append(f'    <texture name="{spec.key}_tex" type="2d" file="ycb/{spec.key}/texture.png"/>')
-        lines.append(f'    <material name="{spec.key}_mat" texture="{spec.key}_tex" '
+    for spec in OBJECTS:
+        key = spec["key"]
+        lines.append(f'    <mesh name="{key}_visual" file="ycb/{key}/visual.obj"/>')
+        for hull in sorted((OUTPUT_ROOT / key).glob("collision_*.obj")):
+            lines.append(f'    <mesh name="{key}_{hull.stem}" file="ycb/{key}/{hull.name}"/>')
+        lines.append(f'    <texture name="{key}_tex" type="2d" file="ycb/{key}/texture.png"/>')
+        lines.append(f'    <material name="{key}_mat" texture="{key}_tex" '
                      'specular="0.2" shininess="0.3"/>')
     lines.extend(("  </asset>", "</mujocoinclude>", ""))
     path.write_text("\n".join(lines))
@@ -128,21 +129,23 @@ def write_assets(path):
 def write_bodies(path, records):
     lines = ["<mujocoinclude>"]
     for spec, record in records:
+        key, body = spec["key"], spec["body"]
+        position_xy = spec["position_xy"]
         z = TABLE_TOP_Z + OBJECT_CLEARANCE_Z - record["min_z"]
-        w, x, y, qz = yaw_quaternion(spec.yaw_deg)
-        lines.append(f'  <body name="{spec.body}" pos="{spec.position_xy[0]:.4f} '
-                     f'{spec.position_xy[1]:.4f} {z:.5f}" quat="{w:.8f} {x:.1f} {y:.1f} {qz:.8f}">')
-        lines.append(f'    <freejoint name="{spec.body}_free"/>')
-        lines.append(f'    <geom name="{spec.key}_visual" type="mesh" mesh="{spec.key}_visual" '
-                     f'material="{spec.key}_mat" group="2" contype="0" conaffinity="0" density="0"/>')
+        w, x, y, qz = yaw_quaternion(spec["yaw_deg"])
+        lines.append(f'  <body name="{body}" pos="{position_xy[0]:.4f} '
+                     f'{position_xy[1]:.4f} {z:.5f}" quat="{w:.8f} {x:.1f} {y:.1f} {qz:.8f}">')
+        lines.append(f'    <freejoint name="{body}_free"/>')
+        lines.append(f'    <geom name="{key}_visual" type="mesh" mesh="{key}_visual" '
+                     f'material="{key}_mat" group="2" contype="0" conaffinity="0" density="0"/>')
         total_volume = sum(volume for _, volume in record["hulls"])
         for hull, volume in record["hulls"]:
             if total_volume > 0:
-                mass = spec.mass_kg * volume / total_volume
+                mass = spec["mass_kg"] * volume / total_volume
             else:
-                mass = spec.mass_kg / len(record["hulls"])
-            lines.append(f'    <geom name="{spec.key}_{hull.stem}" type="mesh" '
-                         f'mesh="{spec.key}_{hull.stem}" group="3" mass="{mass:.8f}" '
+                mass = spec["mass_kg"] / len(record["hulls"])
+            lines.append(f'    <geom name="{key}_{hull.stem}" type="mesh" '
+                         f'mesh="{key}_{hull.stem}" group="3" mass="{mass:.8f}" '
                          'condim="6" friction="1 0.02 0.002" solref="0.005 1"/>')
         lines.append("  </body>")
     lines.extend(("</mujocoinclude>", ""))
@@ -171,15 +174,15 @@ def main():
         raise FileNotFoundError(f"Missing source models: {SOURCE_ROOT}")
     OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
     records = []
-    for spec in OBJECTS.values():
-        source = SOURCE_ROOT / spec.source
-        visual = source / spec.visual_file
-        texture = source / spec.texture_file
+    for spec in OBJECTS:
+        source = SOURCE_ROOT / spec["source"]
+        visual = source / spec["visual_file"]
+        texture = source / spec["texture_file"]
         collision = source / "collision_vhacd.obj"
         for required in (visual, texture, collision):
             if not required.is_file():
                 raise FileNotFoundError(required)
-        destination = OUTPUT_ROOT / spec.key
+        destination = OUTPUT_ROOT / spec["key"]
         if destination.exists():
             shutil.rmtree(destination)
         destination.mkdir()
@@ -188,8 +191,8 @@ def main():
         hulls = split_hull(collision, destination, "collision")
         record = {"min_z": visual_min_z(visual), "hulls": hulls}
         records.append((spec, record))
-        print(f"{spec.key:16s} z={TABLE_TOP_Z + OBJECT_CLEARANCE_Z - record['min_z']:.4f} m "
-              f"hulls={len(hulls)} mass={spec.mass_kg:.3f} kg")
+        print(f"{spec['key']:16s} z={TABLE_TOP_Z + OBJECT_CLEARANCE_Z - record['min_z']:.4f} m "
+              f"hulls={len(hulls)} mass={spec['mass_kg']:.3f} kg")
     write_assets(SCENE_ASSET_DIR / "ycb_assets.xml")
     write_bodies(SCENE_ASSET_DIR / "ycb_objects.xml", records)
     write_readme(OUTPUT_ROOT / "README.md")

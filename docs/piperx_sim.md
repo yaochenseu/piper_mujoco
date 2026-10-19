@@ -1,6 +1,6 @@
 # Piper X 仿真
 
-本入口从 `external/agx_arm_urdf` 中的官方 Piper X + AGX 平行夹爪模型生成 MuJoCo 模型，默认提供瓶子的接近、闭爪、提起、搬运、释放和撤离，保留 `--object cube` 红方块选项。
+本入口从 `external/agx_arm_urdf` 中的官方 Piper X + AGX 平行夹爪模型生成 MuJoCo 模型，默认对场景中的 YCB 物体执行接近、闭爪、提起、搬运、释放和撤离。`main_piperx.py --target` 接受任意场景 body 名，默认 `ycb_banana`。
 
 当前默认演示使用仿真物体的已知中心计算抓取位姿，不调用目标识别或 GraspNet。物体具有自由关节，由两侧手指接触和摩擦夹持；没有物体绑定约束，也没有在抓取过程中直接修改物体位置。
 
@@ -35,29 +35,19 @@ python -m mujoco.viewer --mjcf=manipulator_grasp/assets/agilex_piper_x/scene.xml
 视觉入口为 `main_piperx_vision.py`，默认使用末端随动的 `wrist` RGB-D 相机；控制逻辑分离在 `utils/piperx_vision_control.py`：
 
 ```bash
-python main_piperx_vision.py --hold   # 蓝色瓶子，含实时 RGB/深度画面
+python main_piperx_vision.py --target "banana ." --hold      # 任意 DINO 提示词
 python main_piperx_vision.py --headless --fast
-python main_piperx_vision.py --obj-x 0.30 --obj-y 0.08      # 移动物体位置
-python main_piperx_vision.py --object cube --hold           # 原红方块
+python main_piperx_vision.py --target ycb_tennis_ball --obj-x 0.30 --obj-y 0.13
+python main_piperx_vision.py --instruction "把草莓放到右边" --hold
 python main_piperx_vision.py --test-release-first            # 故障恢复演练
 python main_piperx_vision.py --no-camera-preview --hold     # 隐藏相机画面
 ```
 
-默认瓶子定义在 `manipulator_grasp/assets/agilex_piper_x/bottle.xml`：蓝色瓶身、白色标签、瓶肩、瓶颈和橙色瓶盖，高 73 mm、瓶身直径 34 mm、总质量 40 g。多个几何体组成同一个自由刚体，标签仅作显示；这是简化的刚性瓶子模型。`--object cube` 会在编译前替换为原来的 36 mm 红色方块，重新计算惯量。`--text` 可覆盖检测提示词；省略时自动使用 `blue bottle .` 或 `red cube .`。
+场景清单定义在 `configs/piperx_scene.yaml`，包含五个 YCB 物体（banana、strawberry、pear、tennis_ball、tomato_soup_can）的 body 名、源模型、质量、初始 XY 和偏航角。构建期参数由 `scripts/prepare_ycb_objects.py` 读取该清单并生成 `manipulator_grasp/assets/agilex_piper_x/ycb_objects.xml`；运行时的抓取目标由 `--target`/`--text` 的 DINO 提示词和分割点云匹配决定，不依赖构建清单。
 
-桌面另外默认放置三个物体，定义在 `manipulator_grasp/assets/agilex_piper_x/table_objects.xml`，可直接修改该文件中的位置、尺寸和颜色：
+当前入口仍执行一次指定目标的抓放，尚未实现多个物体逐个抓取。五个物体均为独立自由刚体，受重力、碰撞和摩擦影响，腕部相机初始画面可见；相邻物体距离约 0.1 m，点云质心匹配阈值为 0.06 m。
 
-| 物体 | body 名称 | 尺寸 | 初始 XY（米） |
-| --- | --- | --- | --- |
-| 紫色方块 | `extra_cube` | 36 × 36 × 36 mm | `(0.50, -0.23)` |
-| 绿色长方体 | `extra_block` | 30 × 44 × 54 mm | `(0.55, -0.04)` |
-| 黄色圆柱 | `extra_cylinder` | 直径 36 mm，高 50 mm | `(0.33, -0.27)` |
-
-连同原目标共四个物体，均为 40 g 的独立自由刚体，受重力、碰撞和摩擦影响，腕部相机初始画面可见；绿色放置区保留为空。切换 `--object cube` 只替换原目标，其他三个物体保留。当前入口仍执行一次指定目标的抓放，尚未实现多个物体逐个抓取，也未验证新增各形状的视觉抓放；相同形状不同颜色的目标仍可能被检测器混淆。
-
-新增物体后，29 项测试再次全部通过。最终场景中默认蓝瓶视觉抓放第 0 轮成功，物理抬升 98.57 mm、放置 XY 误差 0.80 mm，无记录到的机械臂自身/桌面接触或 MuJoCo 警告。本地结果见 `docs/vision_runs/multi_objects_grasp_final/result.json`；初始相机图和四物体稳定性检查见 `docs/vision_runs/multi_objects_scene/`。这些新结果与下文历史单目标场景验收分开记录。
-
-瓶子模式会从 SAM 分割后的 RGB-D 点云中拟合下段圆柱面，估计瓶身中心和半径。GraspNet 提供候选评分及夹爪开合方向，再将候选修正为对准瓶身的垂直夹持姿态，按估计直径设置预检查开口，并进行去重、点云碰撞筛选和完整路径检查。碰撞代理的接触平面采用 AGX TCP 平面（插入深度为零）。拟合失败时停止该轮，不用物体真值补位；原始候选和拟合结果保存在 `grasps_raw.npy`、`bottle_body_fit.json`。此修正针对当前直立小瓶子的形状，不代表支持任意瓶子姿态。
+GraspNet 从 SAM 目标点云提供候选评分及夹爪开合方向，随后进行去重、点云碰撞筛选和完整路径检查。碰撞代理的接触平面采用 AGX TCP 平面（插入深度为零）；原始候选保存在 `grasps_raw.npy`。抓取策略不读取目标的注册身份或仿真真值，只使用分割点云、触觉接触和 TCP 位姿。
 
 - 视觉定位采用 DINO 文本检测 → SAM 分割 → RGB-D 点云 → GraspNet 候选。运动前预检查接近、下降、提起、搬运、下放、撤离、返回观察位七段轨迹，连续插值姿态，逐个采样检查逆解、关节跳变和机械臂与自身/桌面的碰撞。
 - 抓取候选优先使用 GraspNet；仅当六自由度候选都没有可达、无碰撞路径时，才用 SAM 目标点云的稳健包围盒中心生成竖直顶抓候选作为兜底。该兜底不读取物体真值，也不为单个物体手调候选。
@@ -81,17 +71,22 @@ python main_piperx_vision.py --no-camera-preview --hold     # 隐藏相机画面
 
 因此，当前接口声明支持五个方向，但实际可靠支持仍以 `right` 为主。`front` 与 `back` 目前只相差 0.10 m，x 坐标不同而 y 坐标相同，不能据此认为它们已经在场景中形成符合直觉的“前/后”落点。若要支持任意方向，应根据腕部 RGB-D 检测桌面可用区域、避开物体和机械臂可达范围后生成落点，并为每个方向补充完整抓放验收，而不是继续扩充固定坐标表。
 
-中文指令中的目标侧别和目的地方向分开解析。例如“把左边的香蕉放到右边”会得到目标 `banana`、目标选择 `leftmost` 和目的地 `right`；VLM 显式返回合法方向时以 VLM 结果为准，规则后端或 VLM 未给出方向时取指令中最后出现的方向词，避免把“左边的”误当成放置方向。指令仍无方向时默认为 `center`。`auto` 后端在配置了 VLM 时优先使用 VLM，失败或未配置时回退到规则解析。目标短语仍须匹配当前场景的目标注册表，未注册目标会停止并报错。
+中文指令中的目标侧别和目的地方向分开解析。例如“把左边的香蕉放到右边”会得到目标短语“香蕉”、目标选择 `leftmost` 和目的地 `right`；VLM 显式返回合法方向时以 VLM 结果为准，规则后端或 VLM 未给出方向时取指令中最后出现的方向词，避免把“左边的”误当成放置方向。指令仍无方向时默认为 `center`。
+
+语义层是开放词汇的：`--instruction` 由 VLM 自由生成 GroundingDINO 提示词，不要求目标出现在固定名单中。首次分割完成后，`main_piperx_vision.py` 用分割点云的 XY 质心与场景中所有 free joint body 的 `xipos` 做最近邻匹配（阈值 0.06 m），匹配结果写入 `target_body.json` 并作为仿真验收目标；最近距离超过阈值时报错并列出全部候选 body。`--target` 现在是自由的 DINO 提示词（例如 `teacup`），不再是注册表键；只有与 `--obj-x/--obj-y/--obj-yaw` 一起使用时才要求它是场景 body 名（如 `ycb_banana`），用于感知前摆位。场景物体清单位于 `configs/piperx_scene.yaml`。
+
+`--semantic-backend` 默认 `openai`，必须配置 `PIPERX_VLM_BASE_URL` 和 `PIPERX_VLM_MODEL`，否则启动时给出明确报错。显式传 `rules` 使用开放词汇规则解析，或传 `auto` 在 VLM 失败时回退到规则；不提供 `--instruction` 时可用 `--text` 直接给出 DINO 提示词。
 
 可以手工指定落点，命令行参数优先于方向表：
 
 ```bash
-python main_piperx_vision.py --instruction "把香蕉放到右边" --semantic-backend openai --hold
-python main_piperx_vision.py --instruction "把香蕉放到前面" --hold
-python main_piperx_vision.py --instruction "把香蕉放到中间" --drop-x 0.42 --drop-y 0.16 --hold
+python main_piperx_vision.py --instruction "把香蕉放到右边" --hold
+python main_piperx_vision.py --instruction "把草莓放到左边" --semantic-backend rules --hold
+python main_piperx_vision.py --text "tennis ball ." --target ycb_tennis_ball \
+    --obj-x 0.30 --obj-y 0.13 --obj-yaw 0.3 --hold
 ```
 
-使用 `openai` 后端时，需要设置 `PIPERX_VLM_BASE_URL`、`PIPERX_VLM_MODEL` 和 `PIPERX_VLM_API_KEY`，模型需支持图像输入；`--drop-x` 和 `--drop-y` 可以分别覆盖单个坐标。`semantic_plan.json` 记录解析出的目标、空间选择、方向和 DINO 提示词，最终落点写入运行结果 `result.json` 并打印到日志，便于区分语义解析结果与固定坐标表。
+使用 `openai` 后端时，需要设置 `PIPERX_VLM_BASE_URL`、`PIPERX_VLM_MODEL` 和 `PIPERX_VLM_API_KEY`，模型需支持图像输入；`--drop-x` 和 `--drop-y` 可以分别覆盖单个坐标。`semantic_plan.json` 记录解析出的目标、空间选择、方向和 DINO 提示词，`target_body.json` 记录点云质心、每个候选 body 的距离和最终匹配结果，最终落点写入运行结果 `result.json` 并打印到日志，便于区分语义解析结果与固定坐标表。
 
 ### 腕部 RGB-D 相机
 
@@ -105,7 +100,7 @@ python main_piperx_vision.py --instruction "把香蕉放到中间" --drop-x 0.42
 
 夹持判断采用持续的当前双指触觉、夹爪开口及 TCP 实际提起距离；没有把 TCP 位移当作物体真实抬升高度。真实物体的抬升高度在策略结束后单独验收。
 
-当前限制：每次抓取一个小瓶子或红方块，桌面范围、高度筛选和几何碰撞参数仍针对该场景；逆解与路径检查采用离散采样，没有通用全局避障；每次感知后分段执行动作，并在放置后和失败恢复后更新图像，不是连续视觉伺服。不能据此保证任意物体或任意摆放均能抓取。
+当前限制：每次抓取一个 YCB 物体，桌面范围、高度筛选和几何碰撞参数仍针对该场景；逆解与路径检查采用离散采样，没有通用全局避障；每次感知后分段执行动作，并在放置后和失败恢复后更新图像，不是连续视觉伺服。不能据此保证任意物体或任意摆放均能抓取。
 
 ### 抓取位姿显示
 
@@ -124,7 +119,7 @@ python main_piperx_vision.py --hold --grasp-preview-seconds 10
 
 ### 视觉抓取验收
 
-当前 0° 安装、120° 视场配置已在本机 `piper_mujoco` 环境完成四组视觉抓放验收：默认瓶子、移动位置 `(0.30, 0.08)` 的瓶子、带实时相机画面的实际窗口，以及切回原红方块。四组均在第 0 轮成功，没有触发恢复；物理抬升约 0.099–0.100 m，放置误差分别约 0.76、0.64、0.76、4.34 mm。均无记录到的机械臂自身/桌面接触或 MuJoCo 警告。
+历史瓶子/红方块场景曾在 0° 安装、120° 视场配置下完成四组视觉抓放验收：默认瓶子、移动位置 `(0.30, 0.08)` 的瓶子、带实时相机画面的实际窗口，以及切回原红方块；当前 YCB 场景尚未重新做端到端视觉验收（本机缺少视觉权重）。四组均在第 0 轮成功，没有触发恢复；物理抬升约 0.099–0.100 m，放置误差分别约 0.76、0.64、0.76、4.34 mm。均无记录到的机械臂自身/桌面接触或 MuJoCo 警告。
 
 实际窗口运行正常退出，右上角 RGB/深度预览更新了 178 帧。另一次运动探针确认相机图像随末端移动而变化。此前方块的旋转和故障恢复历史诊断仍保存在 `docs/vision_runs/gripper_support_*/`，不作为本次瓶子验收结果。
 

@@ -9,7 +9,7 @@ from manipulator_grasp.env.piperx_grasp_env import IKError, PiperXGraspEnv, TOP_
 
 class MotionTests(unittest.TestCase):
     def setUp(self):
-        self.env = PiperXGraspEnv(realtime=False)
+        self.env = PiperXGraspEnv(realtime=False, target="ycb_banana")
         self.addCleanup(self.env.close)
 
     def test_preflight_chains_without_changing_live_state(self):

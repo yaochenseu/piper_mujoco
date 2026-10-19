@@ -1,0 +1,48 @@
+table_top_z: 0.740
+object_clearance_z: 0.002
+objects:
+  - key: banana
+    body: ycb_banana
+    source: YcbBanana
+    visual_file: textured_simple_reoriented.obj
+    texture_file: texture_map.png
+    mass_kg: 0.066
+    position_xy: [0.36, -0.12]
+    yaw_deg: 0.0
+    description_zh: 香蕉
+  - key: strawberry
+    body: ycb_strawberry
+    source: YcbStrawberry
+    visual_file: textured_reoriented.obj
+    texture_file: texture_map.png
+    mass_kg: 0.018
+    position_xy: [0.28, -0.27]
+    yaw_deg: 0.0
+    description_zh: 草莓
+  - key: pear
+    body: ycb_pear
+    source: YcbPear
+    visual_file: textured_reoriented.obj
+    texture_file: texture_map.png
+    mass_kg: 0.049
+    position_xy: [0.38, -0.23]
+    yaw_deg: 0.0
+    description_zh: 梨
+  - key: tennis_ball
+    body: ycb_tennis_ball
+    source: YcbTennisBall
+    visual_file: textured_reoriented.obj
+    texture_file: texture_map.png
+    mass_kg: 0.058
+    position_xy: [0.30, 0.13]
+    yaw_deg: 0.0
+    description_zh: 网球
+  - key: tomato_soup_can
+    body: ycb_tomato_soup_can
+    source: YcbTomatoSoupCan
+    visual_file: textured_simple_reoriented.obj
+    texture_file: texture_map.png
+    mass_kg: 0.349
+    position_xy: [0.34, 0.02]
+    yaw_deg: 0.0
+    description_zh: 番茄汤罐头

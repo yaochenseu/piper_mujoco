@@ -1,5 +1,6 @@
-"""Semantic instruction planning and OpenAI-compatible VLM transport."""
+"""Open-vocabulary semantic planning and OpenAI-compatible VLM transport."""
 import json
+import os
 import unittest
 from unittest.mock import patch
 
@@ -10,9 +11,11 @@ from utils.piperx_vlm import (
     OpenAICompatiblePlanner,
     RuleSemanticPlanner,
     VLMError,
+    build_semantic_planner,
     extract_json_object,
     infer_spatial_reference,
     normalize_destination,
+    semantic_match_score,
 )
 
 
@@ -31,15 +34,30 @@ class _Response:
 
 
 class VLMPlannerTests(unittest.TestCase):
-    def test_rules_resolve_target_and_last_destination(self):
+    def test_rules_parse_open_vocabulary_and_last_destination(self):
         plan = RuleSemanticPlanner().plan(None, "拿左边的香蕉放到右边")
-        self.assertEqual(plan.target_key, "banana")
-        self.assertEqual(plan.target_phrase, "banana")
+        self.assertEqual(plan.target_phrase, "香蕉")
+        self.assertEqual(plan.target_label, "香蕉")
         self.assertEqual(plan.spatial_reference, "leftmost")
         self.assertEqual(plan.destination, "right")
-        self.assertEqual(plan.dino_prompt, "banana .")
+        self.assertEqual(plan.dino_prompt, "香蕉 .")
         self.assertEqual(normalize_destination(None, "把右边的梨放到左边"), "left")
         self.assertEqual(infer_spatial_reference("把右边的梨放到左边"), "rightmost")
+
+    def test_rules_accept_unregistered_objects(self):
+        plan = RuleSemanticPlanner().plan(None, "抓取一个紫色独角兽")
+        self.assertEqual(plan.target_phrase, "紫色独角兽")
+        self.assertEqual(plan.destination, "center")
+
+    def test_rules_parse_english_placement(self):
+        plan = RuleSemanticPlanner().plan(None, "put banana on the right")
+        self.assertEqual(plan.target_phrase, "banana")
+        self.assertEqual(plan.destination, "right")
+        self.assertEqual(plan.spatial_reference, "none")
+
+    def test_rules_reject_instruction_without_target(self):
+        with self.assertRaisesRegex(VLMError, "--text"):
+            RuleSemanticPlanner().plan(None, "放到右边")
 
     def test_openai_client_sends_image_and_parses_json(self):
         planner = OpenAICompatiblePlanner("http://127.0.0.1:8000/v1", "deepseek-flash",
@@ -58,7 +76,8 @@ class VLMPlannerTests(unittest.TestCase):
         with patch("utils.piperx_vlm.urllib.request.urlopen", side_effect=fake_urlopen):
             plan = planner.plan(np.zeros((32, 32, 3), dtype=np.uint8),
                                 "把香蕉放到右边")
-        self.assertEqual(plan.target_key, "banana")
+        self.assertEqual(plan.target_phrase, "banana")
+        self.assertEqual(plan.target_label, "banana")
         self.assertEqual(plan.destination, "right")
         self.assertEqual(plan.backend, "openai-compatible")
         request = captured["request"]
@@ -79,7 +98,7 @@ class VLMPlannerTests(unittest.TestCase):
         response = _Response({"choices": [{"message": {"content": content}}]})
         with patch("utils.piperx_vlm.urllib.request.urlopen", return_value=response):
             plan = planner.plan(np.zeros((8, 8, 3), dtype=np.uint8), "put banana on the right")
-        self.assertEqual(plan.target_key, "banana")
+        self.assertEqual(plan.target_phrase, "banana")
 
     def test_json_fences_and_invalid_payload(self):
         self.assertEqual(extract_json_object('```json\n{"target_phrase": "pear"}\n```'),
@@ -108,9 +127,22 @@ class VLMPlannerTests(unittest.TestCase):
         planner = FallbackSemanticPlanner(BrokenPlanner(), RuleSemanticPlanner(),
                                           log=lambda *_: None)
         plan = planner.plan(None, "把草莓放到左边")
-        self.assertEqual(plan.target_key, "strawberry")
+        self.assertEqual(plan.target_phrase, "草莓")
         self.assertEqual(plan.destination, "left")
         self.assertEqual(plan.backend, "rules")
+
+    def test_openai_backend_requires_configuration(self):
+        with patch.dict(os.environ, {"PIPERX_VLM_BASE_URL": "", "PIPERX_VLM_MODEL": ""}):
+            with self.assertRaisesRegex(ValueError, "PIPERX_VLM_BASE_URL"):
+                build_semantic_planner(log=lambda *_: None)
+            with self.assertRaisesRegex(ValueError, "PIPERX_VLM_BASE_URL"):
+                build_semantic_planner("auto", log=lambda *_: None)
+            self.assertEqual(build_semantic_planner("rules").name, "rules")
+
+    def test_semantic_match_score_is_open_vocabulary(self):
+        self.assertGreater(semantic_match_score("banana", "yellow banana ."), 0)
+        self.assertEqual(semantic_match_score("", "banana"), 0)
+        self.assertEqual(semantic_match_score("pear", "banana"), 0)
 
 
 if __name__ == "__main__":

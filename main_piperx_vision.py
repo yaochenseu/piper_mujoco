@@ -28,17 +28,16 @@ from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv(ROOT / ".env", override=False)
 
-from utils.piperx_semantic import (  # noqa: E402
-    DEFAULT_OBJECT,
+from utils.piperx_scene import (  # noqa: E402
     TABLE_TOP_Z,
-    resolve_target,
-    semantic_match_score,
-    target_choices,
+    resolve_scene_body,
+    scene_bodies,
 )
 from utils.piperx_vlm import (  # noqa: E402
     DEFAULT_DROP_XY,
     build_semantic_planner,
     drop_xy_for_plan,
+    semantic_match_score,
 )
 from utils.piperx_vision_control import (  # noqa: E402
     GRASP_INSERTION_DEPTH,
@@ -47,12 +46,6 @@ from utils.piperx_vision_control import (  # noqa: E402
 )
 
 setup_graspnet_path()
-
-# The editable graspnetAPI install is shadowed once graspnet's model directory
-# puts graspnet-baseline on sys.path, so import the API before the model.
-from graspnetAPI import GraspGroup  # noqa: E402
-from data_utils import CameraInfo, create_point_cloud_from_depth_image  # noqa: E402
-from collision_detector import ModelFreeCollisionDetector  # noqa: E402
 
 RENDER_WIDTH = 1280
 RENDER_HEIGHT = 960
@@ -72,6 +65,7 @@ APPROACH_COS = 0.8
 OBJECT_XY_DIST = 0.04
 MIN_WIDTH = 0.01
 MAX_WIDTH = 0.095
+BODY_MATCH_MAX_DISTANCE = 0.06
 
 
 class Logger:
@@ -87,12 +81,13 @@ class Logger:
 
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--target", choices=target_choices(), default=DEFAULT_OBJECT,
-                        help="Registered target used when no instruction is supplied")
+    parser.add_argument("--target",
+                        help="GroundingDINO phrase, or a scene body name when placing with --obj-x/--obj-y")
     parser.add_argument("--instruction", help="Natural-language pick/place instruction")
     parser.add_argument("--text", help="Override the GroundingDINO target phrase")
-    parser.add_argument("--semantic-backend", choices=("auto", "rules", "openai"), default="auto",
-                        help="Instruction parser; auto uses VLM when configured, else rules")
+    parser.add_argument("--semantic-backend", choices=("auto", "rules", "openai"), default="openai",
+                        help="Instruction parser; openai requires PIPERX_VLM_BASE_URL/MODEL, "
+                             "auto falls back to rules on VLM failure")
     parser.add_argument("--vlm-base-url", help="OpenAI-compatible VLM base URL")
     parser.add_argument("--vlm-model", help="Multimodal model name served by the VLM endpoint")
     parser.add_argument("--vlm-timeout", type=float, default=60.0)
@@ -174,7 +169,7 @@ def in_table_xy(point):
 
 
 def select_detection(detections, depth, camera, log, *, labels=None,
-                     target_phrase=None, target_key=None, spatial_reference="none"):
+                     target_phrase=None, spatial_reference="none"):
     """Select the semantically matching on-table box, then apply spatial reference."""
     if len(detections) == 0:
         return None, None
@@ -195,7 +190,7 @@ def select_detection(detections, depth, camera, log, *, labels=None,
             "index": index,
             "point": point,
             "confidence": float(detections.confidence[index]),
-            "match": semantic_match_score(label, target_phrase, target_key),
+            "match": semantic_match_score(label, target_phrase),
             "label": label,
         })
     if candidates:
@@ -222,10 +217,10 @@ def select_detection(detections, depth, camera, log, *, labels=None,
         return int(chosen["index"]), chosen["point"]
 
     ordered = np.argsort(-detections.confidence)
-    if target_phrase or target_key:
+    if target_phrase:
         ordered = sorted(ordered, key=lambda index: (
             -semantic_match_score(labels[index] if labels is not None and index < len(labels) else "",
-                                  target_phrase, target_key),
+                                  target_phrase),
             -float(detections.confidence[index])))
     index = int(ordered[0])
     log(f"  no box centre on the table; falling back to highest-ranked box {index}")
@@ -305,6 +300,11 @@ def _cuda_available():
 def perceive(env, args, weights_dir, diagnostics, log, *, predict_grasps=True):
     """Fresh RGB-D, text detection and segmentation; no simulator object pose."""
     import torch
+    # The editable graspnetAPI install is shadowed once graspnet's model
+    # directory puts graspnet-baseline on sys.path, so import the API first.
+    from graspnetAPI import GraspGroup
+    from data_utils import CameraInfo, create_point_cloud_from_depth_image
+    from collision_detector import ModelFreeCollisionDetector
     diagnostics.mkdir(parents=True, exist_ok=True)
     timings = {}
     # 1. Smoke render, also the RGB-D frame used for perception.
@@ -333,11 +333,11 @@ def perceive(env, args, weights_dir, diagnostics, log, *, predict_grasps=True):
     detections, labels = detection
     semantic_plan = getattr(args, "semantic_plan", None)
     target_phrase = (semantic_plan.target_phrase if semantic_plan is not None else args.text)
-    target_key = (semantic_plan.target_key if semantic_plan is not None else args.target)
+    target_key = env.target_key or None
     spatial_reference = (semantic_plan.spatial_reference if semantic_plan is not None else "none")
     box_index, box_world = select_detection(
         detections, depth, camera, log, labels=labels, target_phrase=target_phrase,
-        target_key=target_key, spatial_reference=spatial_reference)
+        spatial_reference=spatial_reference)
     detections_report["selected_index"] = box_index
     detections_report["selected_box"] = detections.xyxy[box_index].tolist()
     detections_report["selected_confidence"] = float(detections.confidence[box_index])
@@ -619,22 +619,17 @@ def choose_candidate(env, observation, args, diagnostics, log, home_pose, cycle=
     raise RuntimeError(f"No fully reachable path among {checked} filtered candidates")
 
 
-def apply_semantic_instruction(env, args, diagnostics, log):
-    """Resolve the operator instruction before the first perception cycle."""
+def apply_instruction(env, args, diagnostics, log):
+    """Turn an instruction or --target into a DINO prompt and drop point."""
     if args.instruction:
         planner = build_semantic_planner(
             args.semantic_backend, base_url=args.vlm_base_url, model=args.vlm_model,
             timeout=args.vlm_timeout, max_tokens=args.vlm_max_tokens, log=log)
         frame = env.render(camera=VISION_CAMERA, width=RENDER_WIDTH, height=RENDER_HEIGHT)
         save_bgr(diagnostics / "semantic_rgb.png", frame["img"])
-        plan = planner.plan(frame["img"], args.instruction)
-        spec = resolve_target(plan.target_key or plan.target_phrase or args.instruction)
-        if spec is None:
-            raise RuntimeError(
-                f"VLM phrase {plan.target_phrase!r} does not match a scene object; "
-                f"use one of {', '.join(target_choices())} or pass --target explicitly")
-        env.set_target(spec)
-        args.target = spec.key
+        bodies = sorted(scene_bodies(env))
+        plan = planner.plan(frame["img"], args.instruction,
+                            scene_context=", ".join(bodies))
         if args.text is None:
             args.text = plan.dino_prompt
         args.semantic_plan = plan
@@ -643,25 +638,57 @@ def apply_semantic_instruction(env, args, diagnostics, log):
         write_json(diagnostics / "semantic_plan.json", {
             "planner": planner.name,
             "plan": plan.as_dict(),
-            "resolved_target": spec.key,
+            "scene_bodies": bodies,
+            "target_body": None,
         })
         log(f"Semantic plan ({planner.name}): {plan.as_dict()}")
         log(f"DINO prompt: {args.text!r}; drop_xy={(args.drop_x, args.drop_y)}")
         return plan
 
-    spec = resolve_target(args.target)
-    if spec is None:
-        raise ValueError(f"Unknown target {args.target!r}")
-    env.set_target(spec)
-    if args.text is None:
-        args.text = spec.prompt
+    if args.target and args.text is None:
+        args.text = args.target
     if args.drop_x is None:
         args.drop_x = DEFAULT_DROP_XY[0]
     if args.drop_y is None:
         args.drop_y = DEFAULT_DROP_XY[1]
-    log(f"Target: {spec.key}; DINO prompt: {args.text!r}; "
-        f"drop_xy={(args.drop_x, args.drop_y)}")
+    log(f"DINO prompt: {args.text!r}; drop_xy={(args.drop_x, args.drop_y)}")
     return None
+
+
+def resolve_target_body(env, observation, diagnostics, log,
+                        *, max_distance_m=BODY_MATCH_MAX_DISTANCE):
+    """Match the segmented cloud to a free-joint scene body and select it."""
+    previous = env.target_body or None
+    body, distance, report = resolve_scene_body(
+        env, observation["object_points"], max_distance_m=max_distance_m)
+    report["selected_body"] = body
+    report["selected_distance_m"] = None if body is None else distance
+    write_json(diagnostics / "target_body.json", report)
+    if body is None:
+        candidates = ", ".join(entry["body"] for entry in report["candidates"])
+        nearest = report["candidates"][0] if report["candidates"] else None
+        nearest_text = (f"nearest {nearest['body']} at {distance:.4f} m"
+                        if nearest is not None else "no scene bodies")
+        raise RuntimeError(
+            f"Detected object does not match any scene body ({nearest_text}, "
+            f"limit {max_distance_m:.3f} m); scene bodies: {candidates or 'none'}")
+    if previous is not None and previous != body:
+        log(f"WARNING: segmentation matched {body!r} but {previous!r} was selected before perception")
+    if env.target_body != body:
+        env.set_target(body)
+    log(f"Matched detected object to scene body {body!r} at {distance:.4f} m")
+    return body, report
+
+
+def check_target_consistency(env, observation, log,
+                             *, max_distance_m=BODY_MATCH_MAX_DISTANCE):
+    if env.target_body_id < 0:
+        return
+    position = env.data.xipos[env.target_body_id]
+    distance = float(np.linalg.norm(position[:2] - observation["centroid"][:2]))
+    if distance > max_distance_m:
+        log(f"WARNING: observed object centroid is {distance:.4f} m from selected body "
+            f"{env.target_body!r}; the object may have been displaced")
 
 
 def run(args):
@@ -671,6 +698,8 @@ def run(args):
     from utils.piperx_vision_control import run_closed_loop
     from utils.piperx_grasp_display import GraspPoseDisplay
 
+    if not (args.instruction or args.text or args.target):
+        raise ValueError("Provide --instruction, --text, or --target")
     if not 1 <= args.max_attempts <= 5 or args.max_candidates < 1:
         raise ValueError("max-attempts must be 1..5 and max-candidates must be positive")
     if not np.isfinite(args.grasp_preview_seconds) or args.grasp_preview_seconds < 0:
@@ -700,8 +729,7 @@ def run(args):
         weights_dir = ROOT / weights_dir
 
     with PiperXGraspEnv(viewer=not args.headless, realtime=not args.fast,
-                       render_size=(RENDER_WIDTH, RENDER_HEIGHT),
-                       target=args.target) as env, ExitStack() as resources:
+                       render_size=(RENDER_WIDTH, RENDER_HEIGHT)) as env, ExitStack() as resources:
         grasp_display = resources.enter_context(GraspPoseDisplay(env))
         preview = None
         if not args.headless and not args.no_camera_preview:
@@ -713,9 +741,15 @@ def run(args):
                 preview.update()
             env.step = preview_step
         env.wait(0.4)
-        apply_semantic_instruction(env, args, diagnostics, log)
+        apply_instruction(env, args, diagnostics, log)
         # Initial conditions are allowed before the first perception frame.
         if args.obj_x is not None or args.obj_y is not None or args.obj_yaw:
+            bodies = scene_bodies(env)
+            if args.target not in bodies:
+                raise ValueError(
+                    f"--obj-x/--obj-y/--obj-yaw require --target to be a scene body name; "
+                    f"choose one of: {', '.join(sorted(bodies))}")
+            env.set_target(args.target)
             address = env.model.joint(env.target_free_joint_name).qposadr[0]
             if args.obj_x is not None:
                 env.data.qpos[address] = args.obj_x
@@ -727,7 +761,8 @@ def run(args):
             env.wait(0.3)
 
         # Independent simulation audit. None of these values enter the policy.
-        initial_truth = env.object_position.copy()
+        initial_truth = None
+        target_resolved = False
         unexpected_contacts = set()
         original_step = env.step
         def audit_step():
@@ -741,13 +776,21 @@ def run(args):
         observations = []
         displayed_grasps = []
         def observe(cycle, phase):
+            nonlocal initial_truth, target_resolved
             grasp_phase = phase in ("pickup", "pregrasp") or phase.startswith("pregrasp_retry")
             if grasp_phase:
                 grasp_display.clear()
                 if preview is not None:
                     preview.update(force=True)
-            result = perceive(env, args, weights_dir, diagnostics / f"cycle_{cycle:02d}" / phase,
+            folder = diagnostics / f"cycle_{cycle:02d}" / phase
+            result = perceive(env, args, weights_dir, folder,
                               log, predict_grasps=grasp_phase)
+            if not target_resolved:
+                resolve_target_body(env, result, folder, log)
+                target_resolved = True
+                initial_truth = env.object_position.copy()
+            else:
+                check_target_consistency(env, result, log)
             observations.append({"id": result["id"], "phase": phase,
                                  "centroid": result["centroid"],
                                  "camera": result["camera"],
@@ -814,17 +857,22 @@ def run(args):
             max_support_trials=args.max_candidates,
             reobserve_final=lambda retry_cycle: observe(retry_cycle, "pregrasp_retry"))
         # Independent acceptance is evaluated only after the control policy ends.
+        if initial_truth is None:
+            raise RuntimeError("Closed-loop policy returned without an observation")
         final_truth = env.object_position.copy()
         lift = float(env.max_object_height - initial_truth[2])
         xy_error = float(np.linalg.norm(final_truth[:2] - [args.drop_x, args.drop_y]))
         z_error = float(abs(final_truth[2] - initial_truth[2]))
         truth_success = bool(lift >= 0.04 and xy_error < 0.04 and z_error < 0.015
                              and not unexpected_contacts and not env.data.warning.number.any())
+        semantic_plan = getattr(args, "semantic_plan", None)
+        target_label = (semantic_plan.target_phrase if semantic_plan is not None
+                        else env.target_label)
         result.update(success=bool(result["policy_success"] and truth_success),
-                      target=env.target_key, target_label=env.target_spec.label,
+                      target=env.target_key, target_label=target_label,
                       target_body=env.target_body, instruction=args.instruction,
-                      semantic_plan=(args.semantic_plan.as_dict()
-                                     if getattr(args, "semantic_plan", None) is not None else None),
+                      semantic_plan=(semantic_plan.as_dict()
+                                     if semantic_plan is not None else None),
                       caption=args.text, drop_xy=[args.drop_x, args.drop_y],
                       grasp_visualization={"frame": "world", "selected_pickups": displayed_grasps,
                                            "viewer_enabled": not args.headless,
