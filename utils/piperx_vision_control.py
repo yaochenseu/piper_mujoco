@@ -270,11 +270,14 @@ def _plan_pick_place_segments(env, tcp, drop_xy, home_pose, *, reorient_rotation
     if reorient_rotation is not None:
         targets.append(("reorient", above, reorient_rotation, 1.5))
         transport_rotation = reorient_rotation
+    # Verify from the transfer pose above the drop point: it is already
+    # preflighted, and unlike the pre-grasp observation pose it keeps the drop
+    # in view, so a successful placement cannot look like a large drop error.
     targets.extend([
         ("transfer", destination, transport_rotation, 2.0),
         ("place", place, transport_rotation, 1.5),
         ("retreat", place + [0, 0, APPROACH_HEIGHT], transport_rotation, 2.0),
-        ("observe", home_pose[:3, 3], home_pose[:3, :3], 2.0),
+        ("observe", destination, transport_rotation, 2.0),
     ])
     plans, seed = {}, env.get_joint()
     for name, point, attitude, duration in targets:
