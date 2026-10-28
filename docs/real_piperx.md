@@ -441,6 +441,46 @@ RViz 会显示机器人、相机位姿/视锥、RGB-D 图像、RGB-D 点云和�
 - 手眼结果 `T_flange_cam` 来自 `piper_control/tools/calib_results/`。
 - 视觉控制统一使用基座坐标系的 TCP 位姿 `T_base_tcp = T_base_flange @ T_flange_tcp`。
 
+### 标定文件怎么选、怎么读
+
+当前使用的是：
+
+```text
+piper_control/tools/calib_results/2026-10-28_16-09-08_handeye.json
+```
+
+它是 **手眼/TCP 相机标定**。`result.matrix4x4` 是相机在法兰/TCP 坐标系下的
+位姿 `T_flange_cam`，不是夹爪尖端接触标定。夹爪尖端文件
+`2026-10-28_16-18-09_tip_cam.json` 包含 `T_tip_cam` / `T_flange_tip`，
+当前抓取管线不使用。
+
+```python
+import json
+from pathlib import Path
+import numpy as np
+
+path = Path("/media/yzc/F/DOGcode/my/piper/piper_control/"
+            "tools/calib_results/2026-10-28_16-09-08_handeye.json")
+T_flange_cam = np.asarray(
+    json.loads(path.read_text())["result"]["matrix4x4"], dtype=float)
+print(T_flange_cam)          # 4x4, translation in metres
+```
+
+`utils/piperx_real_env.py` 读取同一字段，并计算：
+
+```text
+T_tcp_cam    = inv(T_flange_tcp) @ T_flange_cam
+T_base_camera = T_base_tcp @ T_tcp_cam
+```
+
+其中 `T_flange_tcp` 是配置里的夹爪垫中心 TCP，不是标定 JSON 的一部分。
+只读校验：
+
+```bash
+/home/yzc/miniconda3/envs/piper_mujoco/bin/python \
+  scripts/check_piperx_calibration.py
+```
+
 ## 故障排查
 
 - `arm_status=4 (target_pos_exceeds_limit)`：先检查当前关节是否已经在软件
