@@ -44,6 +44,48 @@ class TargetPointSamplingTests(unittest.TestCase):
         self.assertTrue(object_mask.ravel()[sampled].all())
 
 
+class ReachSphereTests(unittest.TestCase):
+    def test_urdf_reach_sphere_accepts_table_centre_and_rejects_corners(self):
+        center = np.array([0.0, 0.0, 0.123])
+        # The bottle used in the 2026-10-28 real run.
+        self.assertTrue(vc.inside_reach_sphere([0.11, 0.40, 0.03], center, 0.80))
+        self.assertTrue(vc.inside_reach_sphere([0.75, 0.0, 0.20], center, 0.80))
+        # Inside the old x/y rectangle, but outside the ~0.80 m URDF ball.
+        self.assertFalse(vc.inside_reach_sphere([0.65, 0.55, 0.03], center, 0.80))
+        self.assertFalse(vc.inside_reach_sphere([0.79, 0.0, 0.30], center, 0.80))
+        self.assertFalse(vc.inside_reach_sphere([0.0, 0.0, 0.123], center, 0.80,
+                                                min_radius=0.02))
+
+
+class CenterViewTests(unittest.TestCase):
+    def test_yaw_delta_centres_an_off_axis_target(self):
+        camera = {
+            "T_world_camera": np.eye(4),
+            "fx": 500.0,
+            "ppx": 320.0,
+            "width": 640,
+        }
+        # u = 320 + 500 * 0.1 / 1.0 = 370 px; yaw = atan(-0.1/0.2).
+        result = vc.yaw_delta_to_center([0.1, 0.2, 1.0], camera)
+        self.assertFalse(result["centered"])
+        self.assertTrue(result["solution_found"])
+        self.assertAlmostEqual(result["delta_deg"], -np.rad2deg(np.arctan(0.5)),
+                               delta=0.5)
+        self.assertAlmostEqual(result["predicted_u"], 320.0, delta=0.5)
+
+    def test_centred_target_needs_no_move(self):
+        camera = {
+            "T_world_camera": np.eye(4),
+            "fx": 500.0,
+            "ppx": 320.0,
+            "width": 640,
+        }
+        result = vc.yaw_delta_to_center([0.0, 0.0, 1.0], camera)
+        self.assertTrue(result["centered"])
+        self.assertTrue(result["solution_found"])
+        self.assertEqual(result["delta_deg"], 0.0)
+
+
 class AnalyticTopDownTests(unittest.TestCase):
     @staticmethod
     def box_cloud(*, outliers=False, table_noise=False):
@@ -153,6 +195,54 @@ class TwoFingerSupportTests(unittest.TestCase):
         self.assertIn("object_too_wide", result["reason"])
 
 
+class GraspOnlyPlanningTests(unittest.TestCase):
+    class Env:
+        def __init__(self):
+            self.calls = []
+
+        def get_joint(self):
+            return np.zeros(6)
+
+        def plan_to(self, position, rotation, duration=2.0, *, start_joint=None):
+            self.calls.append((np.asarray(position, dtype=float).copy(),
+                               np.asarray(rotation, dtype=float).copy()))
+            return {"goals": [np.zeros(6)], "start_joint": np.zeros(6),
+                    "duration": duration}
+
+    def test_top_down_pregrasp_stays_above(self):
+        env = self.Env()
+        tcp = np.eye(4)
+        tcp[:3, :3] = vc.TOP_DOWN
+        tcp[:3, 3] = [0.30, -0.10, 0.750]
+        vc.plan_grasp_only(env, tcp)
+        positions = [call[0] for call in env.calls]
+        np.testing.assert_allclose(positions[0], [0.30, -0.10, 0.810])
+        np.testing.assert_allclose(positions[1], [0.30, -0.10, 0.750])
+        np.testing.assert_allclose(positions[2], [0.30, -0.10, 0.770])
+        np.testing.assert_allclose(positions[3], [0.30, -0.10, 0.810])
+
+    def test_diagonal_grasp_pregrasp_follows_approach_axis_and_lift_is_vertical(self):
+        env = self.Env()
+        angle = np.deg2rad(60.0)
+        rotation = np.array([
+            [np.cos(angle), 0.0, np.sin(angle)],
+            [0.0, 1.0, 0.0],
+            [-np.sin(angle), 0.0, np.cos(angle)],
+        ]) @ vc.TOP_DOWN
+        tcp = np.eye(4)
+        tcp[:3, :3] = rotation
+        tcp[:3, 3] = [0.30, -0.10, 0.020]
+        vc.plan_grasp_only(env, tcp)
+        positions = [call[0] for call in env.calls]
+        expected_pregrasp = np.array([0.30, -0.10, 0.020]) - rotation[:, 2] * vc.APPROACH_HEIGHT
+        np.testing.assert_allclose(positions[0], expected_pregrasp, atol=1e-8)
+        np.testing.assert_allclose(positions[1], [0.30, -0.10, 0.020])
+        np.testing.assert_allclose(positions[2], [0.30, -0.10, 0.040])
+        np.testing.assert_allclose(positions[3], [0.30, -0.10, 0.080])
+        self.assertGreater(expected_pregrasp[2], 0.020)
+        self.assertGreater(abs(expected_pregrasp[0] - 0.30) + abs(expected_pregrasp[1] + 0.10), 0.0)
+
+
 class FakeEnv:
     """Only implements what the loop touches; truth-like attributes raise."""
 
@@ -237,6 +327,88 @@ class ClosedLoopTests(unittest.TestCase):
                                      drop_xy=DROP, max_attempts=1, log=lambda *_: None)
         self.assertTrue(out["policy_success"])
         self.assertIn("approach", env.executed)
+
+    def test_grasp_only_stops_after_lift(self):
+        env = FakeEnv()
+        held = {"held": True, "contact_fraction": 1.0, "width": 0.03,
+                "current_bilateral": True}
+        with mock.patch.object(vc, "held_object", return_value=held):
+            out = vc.run_closed_loop(
+                env, make_observe(), make_propose(), drop_xy=DROP,
+                max_attempts=1, log=lambda *_: None, grasp_only=True)
+        self.assertTrue(out["policy_success"])
+        self.assertTrue(out["attempts"][0]["grasp_only"])
+        self.assertIn("lift", env.executed)
+        self.assertNotIn("transfer", env.executed)
+        self.assertNotIn("place", env.executed)
+        self.assertEqual(env.gripper, [0.1, 0.0])
+
+    def test_retry_callback_replaces_recovery_and_retries_fresh_cycle(self):
+        env = FakeEnv()
+        observe = make_observe()
+        base_propose = make_propose()
+        state = {"calls": 0, "retry": []}
+
+        def propose(observation, cycle, home_pose):
+            state["calls"] += 1
+            if state["calls"] == 1:
+                raise vc.NoUsableGraspError("no reachable grasp in this view")
+            return base_propose(observation, cycle, home_pose)
+
+        def retry(env, home_pose, reference_z, record):
+            state["retry"].append((home_pose.copy(), reference_z,
+                                   record.get("phase")))
+            return True
+
+        held = {"held": True, "contact_fraction": 1.0, "width": 0.03,
+                "current_bilateral": True}
+        with mock.patch.object(vc, "held_object", return_value=held):
+            out = vc.run_closed_loop(
+                env, observe, propose, drop_xy=DROP, max_attempts=2,
+                log=lambda *_: None, retry=retry)
+        self.assertTrue(out["policy_success"])
+        self.assertEqual(len(state["retry"]), 1)
+        self.assertAlmostEqual(state["retry"][0][1], 0.785)
+        self.assertEqual(state["retry"][0][2], "planning")
+        self.assertEqual(observe.calls,
+                         [(0, "pickup"), (1, "pickup"), (1, "placement")])
+        self.assertEqual(out["recovery_count"], 1)
+
+    def test_retry_callback_false_stops_without_default_recovery(self):
+        env = FakeEnv()
+
+        def observe(cycle, phase):
+            raise vc.TargetNotFoundError("nothing in view")
+
+        def retry(env, home_pose, reference_z, record):
+            return False
+
+        with mock.patch.object(vc, "recover") as recover:
+            out = vc.run_closed_loop(
+                env, observe, make_propose(), drop_xy=DROP, max_attempts=3,
+                log=lambda *_: None, retry=retry)
+        self.assertFalse(out["policy_success"])
+        self.assertEqual(len(out["attempts"]), 1)
+        recover.assert_not_called()
+
+    def test_target_not_found_carries_vlm_search_yaw_to_retry(self):
+        env = FakeEnv()
+        seen = []
+
+        def observe(cycle, phase):
+            raise vc.TargetNotFoundError("target not in frame",
+                                         search_yaw_deg=35.0)
+
+        def retry(env, home_pose, reference_z, record):
+            seen.append(record.get("search_yaw_deg"))
+            return False
+
+        out = vc.run_closed_loop(
+            env, observe, make_propose(), drop_xy=DROP, max_attempts=2,
+            log=lambda *_: None, retry=retry)
+        self.assertFalse(out["policy_success"])
+        self.assertEqual(seen, [35.0])
+        self.assertEqual(out["attempts"][0]["search_yaw_deg"], 35.0)
 
     def test_first_tactile_failure_then_fresh_observation_and_plan(self):
         env = FakeEnv()

@@ -2,11 +2,27 @@
 import numpy as np
 
 
+class TargetNotFoundError(RuntimeError):
+    """No usable instance of the requested target in the current camera view."""
+
+    def __init__(self, message, *, search_yaw_deg=None):
+        super().__init__(message)
+        self.search_yaw_deg = search_yaw_deg
+
+
+class NoUsableGraspError(TargetNotFoundError):
+    """The target is visible, but this view yields no collision-free grasp."""
+
+
 APPROACH_HEIGHT = 0.06
 MIN_LIFT_HEIGHT = 0.04
 LIFT_PROBE_HEIGHT = 0.020
 MIN_LIFT_PROBE_HEIGHT = 0.015
-GRASP_INSERTION_DEPTH = 0.015
+# GraspNet translations sit on the visible surface.  A 0.03 m insertion
+# reaches the mid-section of common 5-8 cm bottles/cans while the table-top
+# clip still prevents the fingertips from going below the table.  Thin or
+# elevated objects can override this with --grasp-insertion-depth.
+GRASP_INSERTION_DEPTH = 0.03
 # Fingertip extent ahead of the pad-centre TCP, measured from the AGX finger
 # collision meshes.  Used only to bound insertion against the tabletop.
 GRIPPER_TIP_AHEAD_M = 0.013
@@ -19,6 +35,111 @@ TOP_DOWN = np.diag([-1.0, 1.0, -1.0])
 # approach axis (TCP +Z).  Both attitudes describe the same physical grasp.
 JAW_FLIP = np.diag([-1.0, -1.0, 1.0])
 ANALYTIC_YAW_DEGREES = (0.0, 45.0, 90.0, 135.0)
+
+
+def inside_reach_sphere(point, center, radius, min_radius=0.0):
+    """Return whether ``point`` is inside the arm's spherical reach envelope.
+
+    Piper X reach is a ball around the shoulder (base_link + 0.123 m), with the
+    URDF chain limiting its radius to about 0.80 m.  Keep this helper pure so
+    the perception, real-env and test layers can share the same convention.
+    """
+    point = np.asarray(point, dtype=float)
+    center = np.asarray(center, dtype=float)
+    if point.shape != (3,) or center.shape != (3,):
+        raise ValueError("Expected a 3D point and a 3D sphere centre")
+    if radius < 0.0 or min_radius < 0.0:
+        raise ValueError("Reach radii must be non-negative")
+    distance = float(np.linalg.norm(point - center))
+    return bool(min_radius <= distance <= radius)
+
+
+def yaw_delta_to_center(target_world, camera, *, max_abs_deg=45.0,
+                        step_deg=0.5, tolerance_px=None):
+    """Return the J1 yaw that projects ``target_world`` near the image centre.
+
+    J1 rotates the whole arm (and the wrist camera) about the base Z axis, so
+    the camera transform after a candidate yaw is ``Rz(yaw) @ T_world_camera``.
+    Searching that one-dimensional family is much more reliable than using the
+    VLM's qualitative "left/right" hint, and it costs no extra perception.
+    Only horizontal centring is possible with J1; the vertical position is left
+    unchanged.
+    """
+    target = np.asarray(target_world, dtype=float)
+    transform = np.asarray(camera["T_world_camera"], dtype=float)
+    if target.shape != (3,) or transform.shape != (4, 4):
+        raise ValueError("Expected a 3D target and a 4x4 camera transform")
+    if not np.isfinite(target).all() or not np.isfinite(transform).all():
+        raise ValueError("Target and camera transform must be finite")
+    fx = float(camera["fx"])
+    ppx = float(camera["ppx"])
+    width = float(camera.get("width", 2.0 * ppx))
+    if tolerance_px is None:
+        tolerance_px = max(8.0, 0.05 * width)
+    if fx <= 0.0 or width <= 0.0:
+        raise ValueError("Camera fx and width must be positive")
+    if max_abs_deg <= 0.0 or step_deg <= 0.0:
+        raise ValueError("max_abs_deg and step_deg must be positive")
+
+    def project_u(delta_deg):
+        angle = np.radians(float(delta_deg))
+        cosine, sine = np.cos(angle), np.sin(angle)
+        rotate = np.eye(4)
+        rotate[:3, :3] = [
+            [cosine, -sine, 0.0],
+            [sine, cosine, 0.0],
+            [0.0, 0.0, 1.0],
+        ]
+        rotated = rotate @ transform
+        point = rotated[:3, :3].T @ (target - rotated[:3, 3])
+        if point[2] <= 1e-6:
+            return None
+        return fx * point[0] / point[2] + ppx
+
+    current_u = project_u(0.0)
+    if current_u is None:
+        return {"centered": False, "solution_found": False,
+                "delta_deg": 0.0, "current_u": None, "predicted_u": None,
+                "tolerance_px": float(tolerance_px)}
+    if abs(current_u - ppx) <= tolerance_px:
+        return {"centered": True, "solution_found": True, "delta_deg": 0.0,
+                "current_u": float(current_u), "predicted_u": float(current_u),
+                "tolerance_px": float(tolerance_px)}
+
+    samples = []
+    for delta in np.arange(-max_abs_deg, max_abs_deg + step_deg * 0.5,
+                           step_deg):
+        u = project_u(float(delta))
+        if u is not None:
+            samples.append((float(delta), float(u)))
+    if not samples:
+        return {"centered": False, "delta_deg": 0.0,
+                "current_u": float(current_u), "predicted_u": None,
+                "tolerance_px": float(tolerance_px)}
+
+    roots = []
+    for (left_deg, left_u), (right_deg, right_u) in zip(samples, samples[1:]):
+        left_error = left_u - ppx
+        right_error = right_u - ppx
+        if left_error == 0.0:
+            roots.append(left_deg)
+        elif left_error * right_error < 0.0:
+            span = right_u - left_u
+            root = (left_deg if abs(span) < 1e-12 else
+                    left_deg + (ppx - left_u) / span * (right_deg - left_deg))
+            roots.append(float(np.clip(root, -max_abs_deg, max_abs_deg)))
+    if roots:
+        delta = min(roots, key=abs)
+        return {"centered": False, "solution_found": True,
+                "delta_deg": float(delta), "current_u": float(current_u),
+                "predicted_u": float(ppx),
+                "tolerance_px": float(tolerance_px)}
+
+    delta, predicted = min(samples, key=lambda item: abs(item[1] - ppx))
+    return {"centered": False, "solution_found": False,
+            "delta_deg": float(delta), "current_u": float(current_u),
+            "predicted_u": float(predicted),
+            "tolerance_px": float(tolerance_px)}
 
 
 def rotation_angle_radians(first, second):
@@ -78,15 +199,35 @@ def observation_pregrasp_pose(env, centroid, *, camera="wrist", camera_height=0.
     if not np.isfinite(camera_height) or not np.isfinite(clearance):
         raise ValueError("camera_height and clearance must be finite")
     tcp = np.asarray(env.tcp_pose, dtype=float)
-    camera_id = env.model.camera(camera).id
-    camera_position = np.asarray(env.data.cam_xpos[camera_id], dtype=float)
-    offset_tcp = tcp[:3, :3].T @ (camera_position - tcp[:3, 3])
-    desired_camera = np.array([
-        centroid[0], centroid[1],
-        max(float(camera_height), float(centroid[2]) + float(clearance)),
-    ])
-    position = desired_camera - np.asarray(rotation, dtype=float) @ offset_tcp
-    return position, np.asarray(rotation, dtype=float).copy()
+    camera_offset = getattr(env, "camera_offset_from_tcp", None)
+    if camera_offset is not None:
+        offset_tcp = np.asarray(camera_offset(camera), dtype=float)
+    else:
+        camera_id = env.model.camera(camera).id
+        camera_position = np.asarray(env.data.cam_xpos[camera_id], dtype=float)
+        offset_tcp = tcp[:3, :3].T @ (camera_position - tcp[:3, 3])
+    camera_rotation = getattr(env, "camera_rotation_from_tcp", None)
+    if camera_rotation is not None:
+        R_tcp_cam = np.asarray(camera_rotation(camera), dtype=float)
+    elif hasattr(env, "model"):
+        camera_id = env.model.camera(camera).id
+        R_tcp_cam = tcp[:3, :3].T @ np.asarray(
+            env.data.cam_xmat[camera_id], dtype=float).reshape(3, 3)
+    else:
+        R_tcp_cam = np.eye(3)
+    desired_rotation = np.asarray(rotation, dtype=float)
+    optical_axis = desired_rotation @ R_tcp_cam[:, 2]
+    z_camera = max(float(camera_height), float(centroid[2]) + float(clearance))
+    # Point the optical axis at the object instead of merely centring the
+    # camera body above it.  A wrist camera is usually pitched relative to the
+    # TCP; ignoring that pitch pushes the object to the image border.
+    if optical_axis[2] < -1e-3:
+        distance = (float(centroid[2]) - z_camera) / float(optical_axis[2])
+        desired_camera = np.asarray(centroid, dtype=float) - optical_axis * distance
+    else:
+        desired_camera = np.array([centroid[0], centroid[1], z_camera])
+    position = desired_camera - desired_rotation @ offset_tcp
+    return position, desired_rotation.copy()
 
 
 def bounded_grasp_insertion(tcp, requested_depth=GRASP_INSERTION_DEPTH, *,
@@ -192,7 +333,12 @@ def top_down_grasp_candidates(object_points, *, table_top_z=0.740,
     lower = np.percentile(points[:, :2], 2.0, axis=0)
     upper = np.percentile(points[:, :2], 98.0, axis=0)
     centre_xy = 0.5 * (lower + upper)
-    top_z = float(np.percentile(points[:, 2], 98.0))
+    # A 98th-percentile top is easily corrupted by a few percent of depth
+    # outliers near the mask edge (e.g. a taller can behind a banana), which
+    # pushes the analytic grasp height above the object and makes the support
+    # slice empty.  The 95th percentile stays on the object while still
+    # representing genuinely tall targets.
+    top_z = float(np.percentile(points[:, 2], 95.0))
     grasp_z = max(table_top_z + 0.003, 0.5 * (table_top_z + top_z) + 0.002)
 
     band = points[np.abs(points[:, 2] - grasp_z) <= 0.020]
@@ -320,6 +466,41 @@ def plan_pick_place(env, tcp, drop_xy, home_pose, *, allow_reorient=True):
                            " | ".join(errors)) from direct_error
 
 
+def plan_grasp_only(env, tcp):
+    """Preflight only the approach/descend/lift-probe/lift segments.
+
+    Used by ``--grasp-only``: the robot stops after the lift is confirmed and
+    returns to its baseline while keeping the object in the closed gripper.
+    No transfer, place, retreat or placement observation is planned, so a
+    valid grasp is not rejected because the drop point is inconvenient.
+    """
+    tcp = np.asarray(tcp, dtype=float)
+    if tcp.shape != (4, 4) or not np.isfinite(tcp).all():
+        raise ValueError("Expected a finite 4x4 TCP transform")
+    position, rotation = tcp[:3, 3], tcp[:3, :3]
+    # Approach from the side of the grasp axis, not always from world +Z.
+    # GraspNet can propose diagonal/side grasps for flat objects such as a
+    # screwdriver; the pre-grasp must lie opposite its approach axis.  The
+    # lift itself is still vertical to clear the table.
+    approach = position - rotation[:, 2] * APPROACH_HEIGHT
+    lift = position + [0, 0, APPROACH_HEIGHT]
+    targets = [
+        ("approach", approach, rotation, 2.0),
+        ("descend", position, rotation, 1.5),
+        ("lift_probe", position + [0.0, 0.0, LIFT_PROBE_HEIGHT], rotation, 0.8),
+        ("lift", lift, rotation, 1.6),
+    ]
+    plans, seed = {}, env.get_joint()
+    for name, point, attitude, duration in targets:
+        try:
+            plan = env.plan_to(point, attitude, duration, start_joint=seed)
+        except RuntimeError as error:
+            raise RuntimeError(f"{name}: {error}") from error
+        plans[name] = plan
+        seed = plan["goals"][-1]
+    return plans
+
+
 def two_finger_support(object_points, tcp, *, width=None, x_half=0.016,
                        z_half=0.025, min_side_points=None, min_span=0.010,
                        max_center_offset=0.015):
@@ -427,7 +608,7 @@ def recover(env, home_pose, reference_z):
 def run_closed_loop(env, observe, propose, *, drop_xy, max_attempts=3, log=print,
                     release_first=False, two_stage=False, propose_pregrasp=None,
                     propose_final=None, support_check=False, max_support_trials=12,
-                    reobserve_final=None):
+                    reobserve_final=None, grasp_only=False, retry=None):
     """Observe -> preflight -> execute -> observe, with fresh data on retries.
 
     observe(cycle, phase) returns an RGB-D observation with a world centroid;
@@ -440,6 +621,12 @@ def run_closed_loop(env, observe, propose, *, drop_xy, max_attempts=3, log=print
     candidate fails either check, the gripper opens, retreats to the final
     pre-grasp pose and the next candidate is requested.  reobserve_final, when
     provided, supplies a fresh RGB-D/final-grasp observation for that retry.
+    retry(env, home_pose, reference_z, record), when provided, replaces the
+    default inter-cycle recovery: it should make the arm safe, move to the next
+    view, and return True; returning False stops the loop.  All old images,
+    grasps and plans are discarded on every retry.
+    With grasp_only=True, the loop stops as soon as the full lift is confirmed;
+    the caller then returns to its baseline while the gripper stays closed.
     This function never reads a simulator object pose or a historical flag.
     """
     if two_stage and (propose_pregrasp is None or propose_final is None):
@@ -586,6 +773,17 @@ def run_closed_loop(env, observe, propose, *, drop_xy, max_attempts=3, log=print
             if record["tcp_lift_m"] < MIN_LIFT_HEIGHT or not record["lift_sensor"]["held"]:
                 raise RuntimeError("Lift not confirmed by current tactile contacts/jaw opening")
             log(f"Lift confirmed by tactile contact, TCP rise={record['tcp_lift_m']:.3f} m")
+            if grasp_only:
+                record.update(result="success", phase="complete",
+                              grasp_only=True)
+                attempts.append(record)
+                return {
+                    "policy_success": True,
+                    "attempts": attempts,
+                    "selected": selected,
+                    "recovery_count": sum(
+                        x.get("recovered", False) for x in attempts),
+                }
             if "reorient" in plans:
                 record["phase"] = "reorient"
                 env.execute_plan(plans["reorient"])
@@ -619,10 +817,23 @@ def run_closed_loop(env, observe, propose, *, drop_xy, max_attempts=3, log=print
             return {"policy_success": True, "attempts": attempts, "selected": selected,
                     "recovery_count": sum(x.get("recovered", False) for x in attempts)}
         except RuntimeError as error:
-            record.update(result="failed", error=str(error))
+            record.update(result="failed", error=str(error),
+                          error_type=type(error).__name__,
+                          search_yaw_deg=getattr(error, "search_yaw_deg", None))
             log(f"Cycle {cycle}: {record['phase']} failed: {error}")
             attempts.append(record)
             if cycle + 1 == max_attempts:
+                break
+            if retry is not None:
+                try:
+                    if retry(env, home_pose, reference_z, record):
+                        record["recovered"] = True
+                        log("Search retry complete; all old images, grasps and plans discarded")
+                        continue
+                except Exception as retry_error:
+                    record["retry_error"] = str(retry_error)
+                    log(f"Search retry stopped: {retry_error}")
+                    break
                 break
             try:
                 recover(env, home_pose, reference_z)

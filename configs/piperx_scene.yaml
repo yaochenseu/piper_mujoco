@@ -43,6 +43,6 @@ objects:
     visual_file: textured_simple_reoriented.obj
     texture_file: texture_map.png
     mass_kg: 0.349
-    position_xy: [0.34, 0.02]
+    position_xy: [0.22, -0.02]
     yaw_deg: 0.0
     description_zh: 番茄汤罐头

@@ -12,16 +12,35 @@ import numpy as np
 from PIL import Image
 
 
-SYSTEM_PROMPT = """You are the semantic planner for a tabletop robot.
+SYSTEM_PROMPT = """You are the semantic planner and visual verifier for a
+tabletop robot.
+
 GroundingDINO accepts arbitrary short English visual noun phrases; it does not
 use a fixed class list. Convert the user's Chinese or English instruction into
 one concise English visual target phrase. Include colour, shape, or material
 only when useful for disambiguation. Do not put actions, pronouns, or spatial
 relations in target_phrase.
 
+Look at the supplied wrist-camera image. If a detector box is supplied, it is
+outlined in green and its label is shown. Verify the target against the image:
+- target_visible: true only if the instructed object is actually visible;
+- selected_matches_target: true/false if a detector box is supplied, or null
+  if there is no box. Do not call a different object the target just because
+  it is green or prominent;
+- search_yaw_deg: if the target is not visible, or the visible view is not
+  suitable, give a signed J1 yaw in degrees, **relative to this current view**,
+  that would bring the target into a better view. Positive means rotate left /
+  counter-clockwise viewed from above; negative means rotate right. Use 10..60
+  degrees; use 0 when the current view is already good or no direction is known.
+- search_reason: a few words explaining visibility/rotation.
+
 Return one JSON object and nothing else:
 {
   "target_phrase": "short English noun phrase",
+  "target_visible": true,
+  "selected_matches_target": null,
+  "search_yaw_deg": 0,
+  "search_reason": "visible and centred",
   "spatial_reference": "leftmost|rightmost|closest|farthest|none",
   "action": "pick_place|pick",
   "destination": "left|right|front|back|center"
@@ -53,9 +72,36 @@ class SemanticPlan:
     dino_prompt: str
     backend: str
     raw: dict | None = None
+    target_visible: bool = True
+    selected_matches_target: bool | None = None
+    search_yaw_deg: float = 0.0
+    search_reason: str = ""
 
     def as_dict(self):
         return asdict(self)
+
+
+def _parse_bool(value, default=None):
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().casefold()
+    if text in ("true", "yes", "1", "visible", "match", "matches"):
+        return True
+    if text in ("false", "no", "0", "not_visible", "missing", "mismatch"):
+        return False
+    return default
+
+
+def _parse_search_yaw(value):
+    try:
+        yaw = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if not np.isfinite(yaw):
+        return 0.0
+    return float(np.clip(yaw, -120.0, 120.0))
 
 
 def normalize_phrase(value):
@@ -167,6 +213,11 @@ def plan_from_payload(payload, instruction, backend):
     destination = normalize_destination(payload.get("destination"), instruction)
     spatial_reference = normalize_spatial_reference(
         payload.get("spatial_reference"), instruction)
+    target_visible = _parse_bool(payload.get("target_visible"), True)
+    selected_matches = _parse_bool(
+        payload.get("selected_matches_target"), None)
+    search_yaw = _parse_search_yaw(payload.get("search_yaw_deg"))
+    search_reason = str(payload.get("search_reason") or "").strip()
     return SemanticPlan(
         instruction=instruction,
         target_phrase=phrase,
@@ -177,6 +228,10 @@ def plan_from_payload(payload, instruction, backend):
         dino_prompt=dino_prompt(phrase),
         backend=backend,
         raw=payload,
+        target_visible=bool(target_visible),
+        selected_matches_target=selected_matches,
+        search_yaw_deg=search_yaw,
+        search_reason=search_reason,
     )
 
 
@@ -222,7 +277,7 @@ def _rule_target_phrase(instruction):
 class RuleSemanticPlanner:
     name = "rules"
 
-    def plan(self, rgb, instruction, *, scene_context=None):
+    def plan(self, rgb, instruction, *, scene_context=None, detection=None):
         phrase = _rule_target_phrase(instruction)
         if not phrase:
             raise VLMError(
@@ -233,6 +288,10 @@ class RuleSemanticPlanner:
             "spatial_reference": infer_spatial_reference(instruction),
             "action": "pick_place",
             "destination": normalize_destination(None, instruction),
+            "target_visible": True,
+            "selected_matches_target": None,
+            "search_yaw_deg": 0,
+            "search_reason": "rules backend cannot verify the image",
         }
         return plan_from_payload(payload, instruction, self.name)
 
@@ -271,10 +330,19 @@ class OpenAICompatiblePlanner:
         self.timeout = float(timeout)
         self.max_tokens = int(max_tokens)
 
-    def plan(self, rgb, instruction, *, scene_context=None):
+    def plan(self, rgb, instruction, *, scene_context=None, detection=None):
         context = ""
         if scene_context:
             context = f"\nActive simulation objects (reference only): {scene_context}\n"
+        if detection:
+            box = detection.get("box")
+            label = detection.get("label")
+            confidence = detection.get("confidence")
+            detection_text = (
+                f"\nDetector box (green): {box}; label={label!r}; "
+                f"confidence={confidence}. Is this the instructed target?")
+        else:
+            detection_text = "\nNo detector box was produced for this image."
         body = {
             "model": self.model,
             "temperature": 0,
@@ -286,7 +354,8 @@ class OpenAICompatiblePlanner:
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": [
                     {"type": "image_url", "image_url": {"url": _image_data_url(rgb)}},
-                    {"type": "text", "text": f"{instruction}{context}"},
+                    {"type": "text",
+                     "text": f"{instruction}{context}{detection_text}"},
                 ]},
             ],
         }
@@ -323,12 +392,14 @@ class FallbackSemanticPlanner:
         self.log = log
         self.name = f"auto({primary.name}->{fallback.name})"
 
-    def plan(self, rgb, instruction, *, scene_context=None):
+    def plan(self, rgb, instruction, *, scene_context=None, detection=None):
         try:
-            return self.primary.plan(rgb, instruction, scene_context=scene_context)
+            return self.primary.plan(
+                rgb, instruction, scene_context=scene_context, detection=detection)
         except Exception as error:
             self.log(f"VLM planner failed ({error}); using {self.fallback.name} fallback")
-            return self.fallback.plan(rgb, instruction, scene_context=scene_context)
+            return self.fallback.plan(
+                rgb, instruction, scene_context=scene_context, detection=detection)
 
 
 def build_semantic_planner(backend="openai", *, base_url=None, model=None, timeout=60.0,

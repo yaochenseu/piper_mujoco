@@ -59,6 +59,45 @@ class VLMPlannerTests(unittest.TestCase):
         with self.assertRaisesRegex(VLMError, "--text"):
             RuleSemanticPlanner().plan(None, "放到右边")
 
+    def test_vlm_visibility_and_rotation_are_parsed(self):
+        planner = OpenAICompatiblePlanner("http://127.0.0.1:8000/v1", "deepseek-flash",
+                                          api_key="test-key", timeout=5)
+        content = json.dumps({
+            "target_phrase": "bottle",
+            "target_visible": False,
+            "selected_matches_target": False,
+            "search_yaw_deg": 35,
+            "search_reason": "drink bottle not in frame",
+            "spatial_reference": "none",
+            "action": "pick",
+            "destination": "center",
+        })
+        captured = {}
+
+        def fake_urlopen(request, timeout):
+            captured["body"] = json.loads(request.data)
+            return _Response({"choices": [{"message": {"content": content}}]})
+
+        with patch("utils.piperx_vlm.urllib.request.urlopen", side_effect=fake_urlopen):
+            plan = planner.plan(
+                np.zeros((32, 32, 3), dtype=np.uint8),
+                "抓取饮料瓶子",
+                detection={"box": [10, 20, 30, 40], "label": "screwdriver",
+                           "confidence": 0.4})
+        self.assertFalse(plan.target_visible)
+        self.assertFalse(plan.selected_matches_target)
+        self.assertAlmostEqual(plan.search_yaw_deg, 35.0)
+        self.assertEqual(plan.search_reason, "drink bottle not in frame")
+        text = captured["body"]["messages"][1]["content"][1]["text"]
+        self.assertIn("Detector box", text)
+        self.assertIn("screwdriver", text)
+
+    def test_rule_plan_defaults_to_visible_without_rotation(self):
+        plan = RuleSemanticPlanner().plan(None, "抓取瓶子")
+        self.assertTrue(plan.target_visible)
+        self.assertIsNone(plan.selected_matches_target)
+        self.assertEqual(plan.search_yaw_deg, 0.0)
+
     def test_openai_client_sends_image_and_parses_json(self):
         planner = OpenAICompatiblePlanner("http://127.0.0.1:8000/v1", "deepseek-flash",
                                           api_key="test-key", timeout=5)

@@ -50,7 +50,7 @@ def main():
         "instruction": args.instruction,
         "planner": plan.backend,
         "target_phrase": plan.target_phrase,
-        "target_key": plan.target_key,
+        "target_label": plan.target_label,
         "spatial_reference": plan.spatial_reference,
         "action": plan.action,
         "destination": plan.destination,

@@ -1,0 +1,74 @@
+# Real Piper X + D435i bridge configuration.
+bridge:
+  socket_path: /tmp/piperx_ros_bridge.sock
+  # Must stay above the bridge's move timeout (30 s) so the bridge can send
+  # its error response before the client gives up and disconnects.
+  request_timeout_s: 45.0
+  state_timeout_s: 2.0
+
+arm:
+  # The driver should be launched with tcp_offset=[0,0,0,0,0,0].
+  # The vision stack converts flange pose to the pad-centre TCP below.
+  flange_tcp_xyz_m: [0.0, 0.0, 0.1295]
+  flange_tcp_rpy_deg: [0.0, 0.0, 90.0]
+  linear_moves: true
+  # Single-stage preflight measures the place point from the initial baseline;
+  # with the default drop this is ~0.46 m, so 0.45 m rejects every candidate
+  # before motion.  Actual per-command moves are still checked by the bridge.
+  max_command_distance_m: 0.50
+  max_command_rotation_deg: 150.0
+  pregrasp_camera_heights_m: [0.18, 0.16, 0.14]
+  # Piper X software limits (degrees), in joint1..joint6 order.  A Cartesian
+  # command is rejected by the firmware when a joint starts outside these.
+  joint_limits_deg:
+    - [-150.0, 150.0]
+    - [0.0, 180.0]
+    - [-170.0, 0.0]
+    - [-89.0, 89.0]
+    - [-89.0, 89.0]
+    - [-180.0, 180.0]
+
+camera:
+  color_topic: /camera/camera/color/image_raw
+  color_info_topic: /camera/camera/color/camera_info
+  depth_topic: /camera/camera/aligned_depth_to_color/image_raw
+  depth_info_topic: /camera/camera/aligned_depth_to_color/camera_info
+  depth_scale_m: 0.001
+  max_frame_age_s: 1.0
+  # Hand-eye result accepted by the calibration skill on 2026-10-28:
+  # 16 samples, translation RMS 2.77 mm, rotation RMS 0.76 deg,
+  # pose span 52.1 deg, TCP spread 99 mm.
+  handeye_json: ../piper_control/tools/calib_results/2026-10-28_16-09-08_handeye.json
+
+gripper:
+  max_width_m: 0.10
+  default_force_n: 1.0
+  force_min_n: 0.5
+  force_max_n: 3.0
+  contact_force_threshold_n: 0.15
+  contact_min_width_m: 0.008
+
+workspace:
+  table_top_z: 0.0
+  # The Piper X URDF chain is about 0.80 m from the shoulder:
+  #   joint2->joint3 0.28503 + joint3->joint4 0.27364
+  #   + joint4->joint5 0.07466 + joint5->joint6 0.035
+  #   + flange/gripper TCP 0.1295 (plus the small 0.0045 gripper base)
+  # joint1 places the shoulder 0.123 m above base_link.  The resulting reach
+  # envelope is a sphere around that shoulder, not a small rectangle.  At the
+  # tabletop (z=0) it gives sqrt(0.80^2 - 0.123^2) ~= 0.790 m horizontal reach.
+  # x/y below are only the outer table bounds; reach_radius_m is the real check.
+  reach_center_xy: [0.0, 0.0]
+  reach_center_z: 0.123
+  reach_radius_m: 0.80
+  reach_min_radius_m: 0.02
+  x: [0.0, 0.80]
+  y: [-0.80, 0.80]
+  table_z: [0.0, 0.50]
+  object_z: [0.002, 0.30]
+  grasp_z: [0.002, 0.25]
+
+safety:
+  execute: false
+  open_gate: false
+  close_gate_on_exit: true

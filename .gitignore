@@ -150,6 +150,8 @@ weights/**
 !weights/.gitkeep
 docs/vision_runs/
 data/
+real_ws/
+log/
 =2.12
 
 # local-only third-party checkouts and notes

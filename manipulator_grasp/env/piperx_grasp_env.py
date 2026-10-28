@@ -12,6 +12,11 @@ from utils.piperx_scene import scene_bodies
 SCENE = Path(__file__).resolve().parents[1] / "assets/agilex_piper_x/scene.xml"
 # TCP +Z points into the object; fingers open along TCP Y.
 TOP_DOWN = np.diag([-1.0, 1.0, -1.0])
+# Real-robot baseline recorded on 2026-10-24.  Joint 4 is 89.38 deg on the
+# real arm, but the simulated wrist range is +/-89 deg and that pose sits on a
+# wrist singularity: the first Cartesian departure has no local IK solution.
+# Use 87 deg in simulation (same posture, 2.4 deg inside the real value).
+HOME_JOINTS_DEG = np.array([5.51, 32.98, -74.92, 87.0, -8.68, 1.28])
 
 
 class IKError(RuntimeError):
@@ -112,10 +117,11 @@ class PiperXGraspEnv:
         mujoco.mj_resetData(self.model, self.data)
         self.data.qpos[self.finger_indices] = [0.05, -0.05]
         mujoco.mj_forward(self.model, self.data)
-        # Start above the table, with both jaws open. This is the only place
-        # arm qpos is assigned directly; motions below use actuators.
-        home = self.solve_ik([0.32, -0.12, 0.90], TOP_DOWN,
-                             seed=np.array([-0.35, 1.7, -1.5, 1.48, 0.0, -0.35]))
+        # Start from the recorded real-robot baseline, with both jaws open.
+        # This is the only place arm qpos is assigned directly; motions below
+        # use actuators.
+        home = np.clip(np.radians(HOME_JOINTS_DEG),
+                       self.limits[:, 0], self.limits[:, 1])
         self.data.qpos[self.q_indices] = home
         self.data.ctrl[self.arm_actuators] = home
         self.data.ctrl[self.gripper_actuator] = 0.1
@@ -252,6 +258,11 @@ class PiperXGraspEnv:
                 "width": width, "height": height, "fx": focal, "fy": focal,
                 "ppx": width / 2, "ppy": height / 2, "scale": 1.0,
                 "T_world_camera": transform}
+
+    def camera_rotation_from_tcp(self, camera="wrist"):
+        """Return the fixed camera optical rotation expressed in the TCP frame."""
+        camera_id = self.model.camera(camera).id
+        return self.tcp_pose[:3, :3].T @ self.data.cam_xmat[camera_id].reshape(3, 3)
 
     def camera_grasp_to_world(self, translation, rotation, camera="wrist", *, T_world_camera=None):
         """Convert using the camera pose at exposure, before the wrist moves.
